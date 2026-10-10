@@ -23,6 +23,11 @@ export function restoreTaskTimer(serialized: string) {
       || typeof value.date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value.date)
       || !Number.isFinite(value.remaining) || value.remaining < 0
       || !(value.end === null || (typeof value.end === "number" && Number.isFinite(value.end)))) return null;
-    return { taskId, date: value.date as string, remaining: value.remaining as number, end: value.end as number | null };
+    const plannedSeconds = Number.isFinite(value.plannedSeconds) && value.plannedSeconds > 0
+      ? value.plannedSeconds as number : Math.max(1, value.remaining as number);
+    const sessionId = typeof value.sessionId === "string" && value.sessionId
+      ? value.sessionId : `session_restored_${value.date}_${taskId.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+    return { taskId, date: value.date as string, remaining: value.remaining as number,
+      end: value.end as number | null, sessionId, plannedSeconds };
   } catch { return null; }
 }

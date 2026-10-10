@@ -26,8 +26,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run typecheck
-      - run: npm test
+      - run: npm run validate
+      - run: npx expo-doctor@1.20.4
   build:
     if: github.event_name != 'pull_request'
     needs: validate

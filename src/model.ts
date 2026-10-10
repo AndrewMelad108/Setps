@@ -107,10 +107,87 @@ export type GlobalTask = {
 
 export type GlobalTaskEntry = {
   minutes?: number;
+  /** Measured focus time. Older records only contain planned minutes. */
+  actualSeconds?: number;
   id: string;           // globalTaskId + '_' + date
   globalTaskId: string;
   date: string;
 };
+
+export type Currency = "EGP" | "USD";
+export type WorkSheet = {
+  id: string;
+  title: string;
+  from: string;
+  to: string;
+  hourlyRate: number;
+  currency: Currency;
+  taskIds: string[];
+  createdAt: number;
+};
+
+export type Appointment = {
+  id: string;
+  title: string;
+  date: string;
+  time: string;
+  notes: string;
+  createdAt: number;
+};
+
+export type WorkSession = {
+  id: string;
+  taskId: string;
+  date: string;
+  seconds: number;
+  source: "timer" | "manual";
+  createdAt: number;
+};
+
+export function isDateKey(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(value + "T12:00:00");
+  return !Number.isNaN(date.valueOf()) && dateKey(date) === value;
+}
+
+export function sheetEntries(sheet: WorkSheet, entries: GlobalTaskEntry[]) {
+  const ids = new Set(sheet.taskIds);
+  return entries.filter(entry => ids.has(entry.globalTaskId)
+    && entry.date >= sheet.from && entry.date <= sheet.to);
+}
+
+export function entrySeconds(entry: GlobalTaskEntry) {
+  return Math.max(0, entry.actualSeconds ?? (entry.minutes ?? 0) * 60);
+}
+
+export function sheetSummary(sheet: WorkSheet, entries: GlobalTaskEntry[]) {
+  const selected = sheetEntries(sheet, entries);
+  const seconds = selected.reduce((total, entry) => total + entrySeconds(entry), 0);
+  return {
+    count: selected.length,
+    seconds,
+    hours: seconds / 3600,
+    total: (seconds / 3600) * sheet.hourlyRate,
+  };
+}
+
+export function sessionsForSheet(sheet: WorkSheet, sessions: WorkSession[]) {
+  const ids = new Set(sheet.taskIds);
+  return sessions.filter(session => ids.has(session.taskId)
+    && session.date >= sheet.from && session.date <= sheet.to);
+}
+
+export function workSheetSummary(sheet: WorkSheet, sessions: WorkSession[]) {
+  const selected = sessionsForSheet(sheet, sessions);
+  const seconds = selected.reduce((total, session) => total + session.seconds, 0);
+  return {
+    taskCount: new Set(selected.map(session => session.taskId)).size,
+    sessionCount: selected.length,
+    seconds,
+    hours: seconds / 3600,
+    total: (seconds / 3600) * sheet.hourlyRate,
+  };
+}
 
 export function globalTaskDue(task: GlobalTask, dateKey: string): boolean {
   if (task.archivedDate && dateKey >= task.archivedDate) return false;

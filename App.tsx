@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Image,
@@ -26,6 +26,9 @@ import {
   sendPasswordResetEmail,
   signInWithEmailAndPassword,
   signOut,
+  deleteUser,
+  EmailAuthProvider,
+  reauthenticateWithCredential,
   FirebaseAuthTypes,
 } from "@react-native-firebase/auth";
 import {
@@ -43,10 +46,20 @@ import {
   track,
   globalTasksRef,
   globalEntriesRef,
+  sheetsRef,
+  appointmentsRef,
+  workSessionsRef,
   saveGlobalTask,
   deleteGlobalTask,
   completeGlobalTask,
   undoGlobalTask,
+  saveSheet,
+  deleteSheet,
+  saveAppointment,
+  deleteAppointment,
+  saveWorkSession,
+  deleteWorkSession,
+  deleteAccountData,
 } from "./src/firebase";
 import {
   dateKey,
@@ -58,11 +71,18 @@ import {
   parseMinutes,
   GlobalTask,
   GlobalTaskEntry,
+  WorkSheet,
+  Appointment,
+  WorkSession,
+  isDateKey,
 } from "./src/model";
 import { LanguageProvider, useLanguage, Translator } from "./src/i18n";
 import { requestTimerPermission, syncTimerNotification } from "./src/timerNotifications";
 import { TaskItem, taskList, visibleTasks, taskStatisticsData } from "./src/tasks";
 import { restoreTaskTimer } from "./src/timerState";
+import { CalendarPanel, SheetsPanel } from "./src/FeaturePanels";
+import { SoundChoice, deleteSoundData, loadSound, pickCustomSound, playFinishSound, saveSound, sounds } from "./src/sounds";
+import { ToastInput, ToastProvider, useToast } from "./src/Toast";
 const C = {
   bg: "#0B1017",
   card: "#151D28",
@@ -75,11 +95,12 @@ const C = {
 
 const emojis = ["🌿", "📖", "💪", "💧", "🧠", "🎨", "💻", "🧘"];
 const colors = ["#B5F4CB", "#C4B5FD", "#FDCB92", "#9ACAFB"];
-const error = (e: unknown, t: Translator) => {
+const error = (e: unknown, t: Translator, showToast: (input: ToastInput) => void) => {
   const code = (e as { code?: string })?.code || "";
-  Alert.alert(
-    t("تعذّر إكمال الطلب"),
-    code.includes("invalid-credential") || code.includes("wrong-password")
+  showToast({
+    type: "error",
+    title: t("تعذّر إكمال الطلب"),
+    message: code.includes("invalid-credential") || code.includes("wrong-password")
       ? t("راجع البريد وكلمة المرور.")
       : code.includes("email-already-in-use")
         ? t("البريد ده مسجّل بالفعل.")
@@ -90,7 +111,7 @@ const error = (e: unknown, t: Translator) => {
             : code.includes("too-many-requests")
               ? t("محاولات كتير، جرّب بعد شوية.")
               : t("حصل خطأ. راجع البيانات وإعداد Firebase وحاول تاني."),
-  );
+  });
 };
 function Label({
   children,
@@ -168,6 +189,7 @@ function LanguageSwitch() {
 }
 function Login() {
   const { t, language } = useLanguage();
+  const { showToast } = useToast();
   const s = makeStyles(language === "ar");
   const [email, setEmail] = useState(""),
     [password, setPassword] = useState(""),
@@ -175,17 +197,14 @@ function Login() {
     [busy, setBusy] = useState(false);
   async function submit() {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()) || password.length < 8)
-      return Alert.alert(
-        t("راجع البيانات"),
-        t("اكتب بريد صحيح وكلمة مرور ٨ أحرف على الأقل."),
-      );
+      return showToast({ type: "warning", title: t("راجع البيانات"), message: t("اكتب بريد صحيح وكلمة مرور ٨ أحرف على الأقل.") });
     setBusy(true);
     try {
       await (
         register ? createUserWithEmailAndPassword : signInWithEmailAndPassword
       )(auth, email.trim(), password);
     } catch (e) {
-      error(e, t);
+      error(e, t, showToast);
     } finally {
       setBusy(false);
     }
@@ -197,12 +216,12 @@ function Login() {
     >
       <ScrollView contentContainerStyle={s.login}>
         <Image
-          source={require("./logo.png")}
+          source={require("./logo-saay.png")}
           style={s.logo}
-          accessibilityLabel={t("خطوات")}
+          accessibilityLabel={t("SYNQ")}
         />
         <LanguageSwitch />
-        <Label style={s.brand}>{t("خطوات")}</Label>
+        <Label style={s.brand}>{t("SYNQ")}</Label>
         <Label style={s.heroTitle}>
           {t("كل يوم أحسن،")}
           {"\n"}
@@ -250,15 +269,12 @@ function Login() {
           />
           <Pressable
             onPress={async () => {
-              if (!email.trim()) return Alert.alert(t("اكتب بريدك أولًا"));
+              if (!email.trim()) return showToast({ type: "warning", title: t("اكتب بريدك أولًا") });
               try {
                 await sendPasswordResetEmail(auth, email.trim());
-                Alert.alert(
-                  t("راجع بريدك"),
-                  t("لو البريد مسجّل هيوصلك رابط لتغيير كلمة المرور."),
-                );
+                showToast({ type: "success", title: t("راجع بريدك"), message: t("لو البريد مسجّل هيوصلك رابط لتغيير كلمة المرور.") });
               } catch (e) {
-                error(e, t);
+                error(e, t, showToast);
               }
             }}
           >
@@ -281,9 +297,12 @@ type Timer = {
   date: string;
   remaining: number;
   end: number | null;
+  sessionId: string;
+  plannedSeconds: number;
 };
 function Home({ user }: { user: FirebaseAuthTypes.User }) {
   const { t, language } = useLanguage();
+  const { showToast } = useToast();
   const s = makeStyles(language === "ar");
   const days = [
     t("أحد"),
@@ -296,7 +315,7 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
   ];
   const [filter, setFilter] = useState<"all" | "done" | "pending">("all"),
     [query, setQuery] = useState(""),
-    [tab, setTab] = useState<"today" | "tasks" | "stats" | "settings">("today"),
+    [tab, setTab] = useState<"today" | "tasks" | "sheets" | "calendar" | "stats" | "settings">("today"),
     [today, setToday] = useState(dateKey()),
     [busy, setBusy] = useState(false),
     [timer, setTimer] = useState<Timer | null>(null),
@@ -306,10 +325,21 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
     [historyDate, setHistoryDate] = useState(dateKey());
   const [globalTasks, setGlobalTasks] = useState<GlobalTask[]>([]);
   const [globalEntries, setGlobalEntries] = useState<GlobalTaskEntry[]>([]);
+  const [sheets, setSheets] = useState<WorkSheet[]>([]);
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [workSessions, setWorkSessions] = useState<WorkSession[]>([]);
+  const [selectedAppointmentDate, setSelectedAppointmentDate] = useState(dateKey());
+  const [finishSound, setFinishSound] = useState<SoundChoice>(sounds[0]);
   const [globalReady, setGlobalReady] = useState(false);
   const [globalFailed, setGlobalFailed] = useState(false);
   const [globalEntriesReady, setGlobalEntriesReady] = useState(false);
   const [gtMinutes, setGtMinutes] = useState("20");
+  const [manualLogTask, setManualLogTask] = useState<TaskItem | null>(null);
+  const [manualMinutes, setManualMinutes] = useState("60");
+  const [manualDate, setManualDate] = useState(dateKey());
+  const [privacyOpen, setPrivacyOpen] = useState(false);
+  const [deleteAccountOpen, setDeleteAccountOpen] = useState(false);
+  const [deletePassword, setDeletePassword] = useState("");
   const [globalTaskEditor, setGlobalTaskEditor] = useState<
     GlobalTask | null | undefined
   >(undefined);
@@ -336,6 +366,7 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
       .catch(() => {
         if (active) setTimerReady(true);
       });
+    loadSound(user.uid).then(value => { if (active) setFinishSound(value); }).catch(() => {});
     getDoc(doc(db, "users", user.uid))
       .then(async (d) => {
         if (active) {
@@ -385,10 +416,22 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
       },
       () => { setGlobalFailed(true); setGlobalEntriesReady(true); },
     );
+    const e = onSnapshot(sheetsRef(user.uid), snap => {
+      setSheets(snap.docs.map((d: FirebaseFirestoreTypes.QueryDocumentSnapshot) => d.data() as WorkSheet));
+    }, () => setGlobalFailed(true));
+    const f = onSnapshot(appointmentsRef(user.uid), snap => {
+      setAppointments(snap.docs.map((d: FirebaseFirestoreTypes.QueryDocumentSnapshot) => d.data() as Appointment));
+    }, () => setGlobalFailed(true));
+    const g = onSnapshot(workSessionsRef(user.uid), snap => {
+      setWorkSessions(snap.docs.map((d: FirebaseFirestoreTypes.QueryDocumentSnapshot) => d.data() as WorkSession));
+    }, () => setGlobalFailed(true));
     return () => {
       active = false;
       c();
       d2();
+      e();
+      f();
+      g();
       clearInterval(interval);
       sub.remove();
     };
@@ -397,13 +440,15 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
     if (timerReady)
       AsyncStorage.setItem(timerKey, JSON.stringify(timer)).catch(() => {});
   }, [timer, timerReady]);
-  const run = async (fn: () => Promise<unknown>) => {
-    if (busy) return;
+  const run = async (fn: () => Promise<unknown>): Promise<boolean> => {
+    if (busy) return false;
     setBusy(true);
     try {
       await fn();
+      return true;
     } catch (e) {
-      error(e, t);
+      error(e, t, showToast);
+      return false;
     } finally {
       setBusy(false);
     }
@@ -440,29 +485,65 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
       : 0;
   const timerName = tasks.find(h => h.id === timer?.taskId)?.name || t("جلسة التركيز");
   const timerFinished = remaining === 0;
+  const previousRemaining = useRef<number | null>(null);
+  const recordedSessions = useRef(new Set<string>());
+  const timerElapsed = (value: Timer, secondsLeft: number) =>
+    Math.max(0, value.plannedSeconds - secondsLeft);
+  const persistTimerSession = (value: Timer, seconds: number) => {
+    if (seconds < 1) return Promise.resolve();
+    return saveWorkSession(user.uid, {
+      id: value.sessionId,
+      taskId: value.taskId.replace(/^global:/, ""),
+      date: value.date,
+      seconds: Math.min(86400, Math.round(seconds)),
+      source: "timer",
+      createdAt: Date.now(),
+    });
+  };
+  useEffect(() => {
+    if (timer && previousRemaining.current !== null && previousRemaining.current > 0 && remaining === 0) {
+      playFinishSound(finishSound);
+    }
+    previousRemaining.current = timer ? remaining : null;
+  }, [remaining, !!timer, finishSound.id, finishSound.uri]);
+  useEffect(() => {
+    if (!timer || remaining !== 0 || recordedSessions.current.has(timer.sessionId)) return;
+    recordedSessions.current.add(timer.sessionId);
+    void persistTimerSession(timer, timerElapsed(timer, remaining))
+      .then(() => showToast({ type: "success", title: t("تم تسجيل الوقت") }))
+      .catch(e => {
+        recordedSessions.current.delete(timer.sessionId);
+        error(e, t, showToast);
+      });
+  }, [timer?.sessionId, remaining]);
   useEffect(() => {
     if (!timerReady) return;
-    void syncTimerNotification(timerFinished ? null : timer, timerName, language)
-      .catch(() => Alert.alert(t("تعذّر عرض إشعار المؤقّت"), t("المؤقّت شغال داخل التطبيق. جرّب تفعيل الإشعارات من الإعدادات.")));
-  }, [timer, timerReady, timerName, timerFinished, language]);
+    void syncTimerNotification(timerFinished ? null : timer, timerName, language, finishSound.id)
+      .catch(() => showToast({ type: "warning", title: t("تعذّر عرض إشعار المؤقّت"), message: t("المؤقّت شغال داخل التطبيق. جرّب تفعيل الإشعارات من الإعدادات.") }));
+  }, [timer, timerReady, timerName, timerFinished, language, finishSound.id]);
   useEffect(() => () => { void syncTimerNotification(null, "", language).catch(() => {}); }, [user.uid]);
   function mark(task: TaskItem, date = today) {
     if (date > today) return;
     const scheduled = date >= task.source.createdDate && globalTaskDue(task.source, date);
     if (!scheduled) return;
     void run(async () => {
-      await completeGlobalTask(user.uid, task.source, date);
+      const measured = timer?.taskId === task.id && timer.date === date
+        ? timerElapsed(timer, remaining) : undefined;
+      if (timer?.taskId === task.id && timer.date === date && measured)
+        await persistTimerSession(timer, measured);
+      await completeGlobalTask(user.uid, task.source, date, measured);
       if (timer?.taskId === task.id && timer.date === date) setTimer(null);
       void track("task_completed");
+      showToast({ type: "success", title: t("تم إنجاز المهمة") });
     });
   }
   function start(h: TaskItem) {
     const go = async () => {
       try {
         if (!(await requestTimerPermission()))
-          Alert.alert(t("إشعارات المؤقّت"), t("فعّل الإشعارات من إعدادات التطبيق لمتابعة الوقت خارج التطبيق."));
+          showToast({ type: "warning", title: t("إشعارات المؤقّت"), message: t("فعّل الإشعارات من إعدادات التطبيق لمتابعة الوقت خارج التطبيق.") });
       } catch {
-        Alert.alert(t("تعذّر عرض إشعار المؤقّت"), t("المؤقّت شغال داخل التطبيق. جرّب تفعيل الإشعارات من الإعدادات."));
+        showToast({ type: "warning", title: t("تعذّر عرض إشعار المؤقّت"), message: t("المؤقّت شغال داخل التطبيق. جرّب تفعيل الإشعارات من الإعدادات.") });
       }
       setTick(Date.now());
       setTimer({
@@ -470,6 +551,8 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
         date: today,
         remaining: h.minutes * 60,
         end: Date.now() + h.minutes * 60000,
+        sessionId: `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        plannedSeconds: h.minutes * 60,
       });
     };
     if (timer && timer.taskId !== h.id)
@@ -478,6 +561,63 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
         { text: t("ابدأ"), onPress: go },
       ]);
     else if (!timer) go();
+  }
+  function stopAndSaveTimer() {
+    if (!timer) return;
+    const current = { ...timer, remaining, end: null };
+    const elapsed = timerElapsed(current, remaining);
+    if (elapsed < 1) return showToast({ type: "warning", title: t("لا يوجد وقت لتسجيله") });
+    setTimer(current);
+    void run(async () => {
+      await persistTimerSession(current, elapsed);
+      recordedSessions.current.add(current.sessionId);
+      setTimer(null);
+      showToast({ type: "success", title: t("تم تسجيل الوقت") });
+    });
+  }
+  function openManualLog(task: TaskItem, date = today) {
+    setManualLogTask(task);
+    setManualDate(date);
+    setManualMinutes("60");
+  }
+  function saveManualLog() {
+    if (!manualLogTask) return;
+    const minutes = parseMinutes(manualMinutes);
+    if (!isDateKey(manualDate) || manualDate > today || !Number.isInteger(minutes) || minutes < 1 || minutes > 1440)
+      return showToast({ type: "warning", title: t("راجع الوقت"), message: t("اكتب تاريخًا صحيحًا ومدة من ١ إلى ١٤٤٠ دقيقة.") });
+    void run(async () => {
+      await saveWorkSession(user.uid, {
+        id: `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        taskId: manualLogTask.source.id,
+        date: manualDate,
+        seconds: minutes * 60,
+        source: "manual",
+        createdAt: Date.now(),
+      });
+      setManualLogTask(null);
+      showToast({ type: "success", title: t("تم تسجيل الوقت") });
+    });
+  }
+  function requestAccountDeletion() {
+    if (!deletePassword)
+      return showToast({ type: "warning", title: t("اكتب كلمة المرور الحالية") });
+    Alert.alert(t("حذف الحساب نهائيًا؟"), t("سيتم حذف الحساب وكل المهمات والجلسات والشيتات والمواعيد. لا يمكن التراجع."), [
+      { text: t("رجوع"), style: "cancel" },
+      { text: t("حذف نهائي"), style: "destructive", onPress: () => void run(async () => {
+        if (!user.email) throw new Error("Account has no email");
+        const credential = EmailAuthProvider.credential(user.email, deletePassword);
+        await reauthenticateWithCredential(user, credential);
+        await deleteAccountData(user.uid);
+        await deleteSoundData(user.uid).catch(() => {});
+        await AsyncStorage.removeItem(timerKey).catch(() => {});
+        await syncTimerNotification(null, "", language).catch(() => {});
+        await setAnalyticsCollectionEnabled(analytics, false).catch(() => {});
+        await deleteUser(user);
+        setDeletePassword("");
+        setDeleteAccountOpen(false);
+        showToast({ type: "success", title: t("تم حذف الحساب والبيانات") });
+      }) },
+    ]);
   }
   function openGlobalTask(task: GlobalTask | null) {
     setGlobalTaskEditor(task);
@@ -496,12 +636,7 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
       parseMinutes(gtMinutes) < 1 || parseMinutes(gtMinutes) > 720 ||
       (!gtIsEssential && !gtDays.length)
     )
-      return Alert.alert(
-        t("راجع بيانات المهمة"),
-        t(
-          "الاسم من ١ إلى ٦٠ حرف، المدة من ١ إلى ٧٢٠ دقيقة، واختار يوم واحد على الأقل.",
-        ),
-      );
+      return showToast({ type: "warning", title: t("راجع بيانات المهمة"), message: t("الاسم من ١ إلى ٦٠ حرف، المدة من ١ إلى ٧٢٠ دقيقة، واختار يوم واحد على الأقل.") });
     await run(async () => {
       const task: GlobalTask = {
         id:
@@ -519,6 +654,7 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
       await saveGlobalTask(user.uid, task);
       setGlobalTaskEditor(undefined);
       void track("global_task_saved");
+      showToast({ type: "success", title: t("تم حفظ المهمة") });
     });
   }
   function removeGlobalTask(task: GlobalTask) {
@@ -530,6 +666,7 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
         setGlobalTasks(current => current.filter(item => item.id !== task.id));
         if (timer?.taskId === `global:${task.id}`) setTimer(null);
         setGlobalTaskEditor(undefined);
+        showToast({ type: "success", title: t("تم حذف المهمة") });
       }) },
     ]);
   }
@@ -538,8 +675,10 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
     if (!task.done) return mark(task, date);
     Alert.alert(t("إلغاء الإنجاز؟"), t("هيتم إلغاء إنجاز المهمة."), [
       { text: t("رجوع"), style: "cancel" },
-      { text: t("إلغاء الإنجاز"), onPress: () => void run(() =>
-        undoGlobalTask(user.uid, task.source.id + "_" + date)) },
+      { text: t("إلغاء الإنجاز"), onPress: () => void run(async () => {
+        await undoGlobalTask(user.uid, task.source.id + "_" + date);
+        showToast({ type: "success", title: t("تم إلغاء الإنجاز") });
+      }) },
     ]);
   }
   const taskCard = (task: TaskItem, date = today) => (
@@ -554,12 +693,19 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
       <Label style={{ color: task.done ? C.mint : C.muted }}>
         {task.done ? t("✓ تم الإنجاز") : task.scheduled ? t("غير مكتملة") : t("غير مجدولة")}
       </Label>
+      {workSessions.some(session => session.taskId === task.source.id && session.date === date) && <Label style={s.small}>
+        {t(date === today ? "وقت مسجل اليوم" : "وقت مسجل")}: {(workSessions.filter(session => session.taskId === task.source.id && session.date === date)
+          .reduce((total, session) => total + session.seconds, 0) / 3600).toFixed(2)} {t("ساعة")}
+      </Label>}
       <View style={s.wrap}>
         {task.scheduled && <Pressable disabled={busy || date > today} style={s.pill} onPress={() => toggleTask(task, date)}>
           <Label style={s.link}>{task.done ? t("إلغاء الإنجاز") : t("○ علّم كمكتملة")}</Label>
         </Pressable>}
         {date === today && task.scheduled && !task.done && <Pressable disabled={!timerReady || busy} style={s.pill} onPress={() => start(task)}>
           <Label style={s.link}>{t("ابدأ التركيز ▷")}</Label>
+        </Pressable>}
+        {date <= today && <Pressable disabled={busy} style={s.pill} onPress={() => openManualLog(task, date)}>
+          <Label style={s.link}>{t("سجل وقت")}</Label>
         </Pressable>}
         <Pressable style={s.pill} disabled={busy} onPress={() => openGlobalTask(task.source)}>
           <Label style={s.link}>{t("تعديل")}</Label>
@@ -575,17 +721,17 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
       <ScrollView contentContainerStyle={s.content}>
         <View style={s.row}>
           <Image
-            source={require("./logo.png")}
+            source={require("./logo-saay.png")}
             style={s.avatar}
-            accessibilityLabel={t("خطوات")}
+            accessibilityLabel={t("SYNQ")}
           />
           <View>
             <Label style={s.small}>{t("كل مهامك في مكان واحد.")}</Label>
-            <Label style={s.brand}>{t("خطوات")}</Label>
+            <Label style={s.brand}>{t("SYNQ")}</Label>
           </View>
         </View>
         <Label style={[s.heroTitle, { marginTop: 26 }]}>
-          {tab === "today" ? t("يوم جديد، فرصة جديدة.") : tab === "tasks" ? t("مهامي") : tab === "stats" ? t("بص على اللي حققته.") : t("مساحتك الخاصة.")}
+          {tab === "today" ? t("يوم جديد، فرصة جديدة.") : tab === "tasks" ? t("مهامي") : tab === "sheets" ? t("شيتات العمل") : tab === "calendar" ? t("مواعيدي") : tab === "stats" ? t("بص على اللي حققته.") : t("مساحتك الخاصة.")}
         </Label>
         <Label style={s.subtitle}>
           {new Date(today + "T12:00:00").toLocaleDateString(
@@ -687,6 +833,30 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
                 {shownTasks.map(task => taskCard(task))}
                 {!shownTasks.length && <Label style={s.subtitle}>{tasks.length ? t("لا توجد مهام مطابقة") : t("أضف أول مهمة وابدأ.")}</Label>}
               </>
+            )}
+            {tab === "sheets" && (
+              <SheetsPanel
+                sheets={sheets}
+                tasks={globalTasks}
+                sessions={workSessions}
+                language={language}
+                t={t}
+                busy={busy}
+                onSave={sheet => run(() => saveSheet(user.uid, sheet))}
+                onDelete={id => run(() => deleteSheet(user.uid, id))}
+                onDeleteSession={id => run(() => deleteWorkSession(user.uid, id))}
+              />
+            )}
+            {tab === "calendar" && (
+              <CalendarPanel
+                appointments={appointments}
+                selectedDate={selectedAppointmentDate}
+                setSelectedDate={setSelectedAppointmentDate}
+                t={t}
+                busy={busy}
+                onSave={item => run(() => saveAppointment(user.uid, item))}
+                onDelete={id => run(() => deleteAppointment(user.uid, id))}
+              />
             )}
             {tab === "stats" && (
               <>
@@ -796,12 +966,38 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
               <>
                 <LanguageSwitch />
                 <View style={s.card}>
+                  <Label style={s.heading}>{t("نغمة انتهاء المهمة")}</Label>
+                  <Label style={s.small}>{t("اختر نغمة من SYNQ أو حمّل ملفًا صوتيًا من جهازك.")}</Label>
+                  <View style={s.wrap}>
+                    {sounds.map(sound => <Pressable key={sound.id}
+                      style={[s.chip, finishSound.id === sound.id && { backgroundColor: C.mint }]}
+                      onPress={() => void saveSound(user.uid, sound)
+                        .then(() => { setFinishSound(sound); playFinishSound(sound); showToast({ type: "success", title: t("تم اختيار النغمة") }); })
+                        .catch(e => error(e, t, showToast))}>
+                      <Label style={{ color: finishSound.id === sound.id ? C.bg : C.text }}>{t(sound.name as any)}</Label>
+                    </Pressable>)}
+                    <Pressable style={[s.chip, finishSound.id === "custom" && { backgroundColor: C.mint }]}
+                      onPress={() => void pickCustomSound(user.uid).then(sound => { if (sound) { setFinishSound(sound); playFinishSound(sound); showToast({ type: "success", title: t("تم اختيار النغمة") }); } }).catch(() => showToast({ type: "error", title: t("تعذّر تحميل النغمة"), message: t("اختر ملفًا صوتيًا بحجم أقل من 15 MB.") }))}>
+                      <Label style={{ color: finishSound.id === "custom" ? C.bg : C.text }}>{t("تحميل من الجهاز")}</Label>
+                    </Pressable>
+                  </View>
+                  {finishSound.id === "custom" && <Label style={s.small}>{finishSound.name}</Label>}
+                </View>
+                <View style={s.card}>
                   <Label style={s.heading}>{t("حسابي")}</Label>
                   <Label style={s.small}>{user.email}</Label>
                   <Label style={[s.small, { marginTop: 15 }]}>
                     {" "}
                     {t("المظهر: ليلي 🌙 · اليوم حسب توقيت جهازك")}{" "}
                   </Label>
+                </View>
+                <View style={s.card}>
+                  <Label style={s.heading}>{t("الخصوصية والبيانات")}</Label>
+                  <Label style={s.small}>{t("اعرف البيانات التي يحفظها SYNQ أو احذف حسابك وبياناتك نهائيًا.")}</Label>
+                  <Button secondary title={t("سياسة الخصوصية")} onPress={() => setPrivacyOpen(true)} />
+                  <Pressable disabled={busy} style={[s.pill, { alignSelf: "stretch", alignItems: "center", backgroundColor: "#48242B" }]} onPress={() => setDeleteAccountOpen(true)}>
+                    <Label style={{ color: "#FF93A0", fontWeight: "800" }}>{t("حذف حسابي وبياناتي")}</Label>
+                  </Pressable>
                 </View>
                 <View style={s.card}>
                   <View style={s.row}>
@@ -888,6 +1084,9 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
               />
             </Pressable>
           </View>
+          {remaining > 0 && timerElapsed(timer, remaining) > 0 && (
+            <Button disabled={busy} title={t("إنهاء وتسجيل الوقت")} onPress={stopAndSaveTimer} />
+          )}
           {remaining === 0 && (
             <Button
               disabled={busy}
@@ -904,6 +1103,8 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
         {([
           ["settings", "options-outline", t("حسابي")],
           ["stats", "stats-chart-outline", t("إحصائياتي")],
+          ["calendar", "calendar-outline", t("مواعيدي")],
+          ["sheets", "document-text-outline", t("شيتاتي")],
           ["tasks", "checkmark-circle-outline", t("مهامي")],
           ["today", "sunny-outline", t("يومي")],
         ] as const).map(([key, icon, title]) => (
@@ -930,7 +1131,71 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
           </Pressable>
         ))}
       </View>
-      {/* ── Global Task Editor Modal ── */}
+      <Modal visible={privacyOpen} animationType="slide" onRequestClose={() => setPrivacyOpen(false)}>
+        <SafeAreaView style={s.screen}><ScrollView contentContainerStyle={s.content}>
+          <View style={s.row}>
+            <Pressable onPress={() => setPrivacyOpen(false)}><Label style={s.link}>{t("إغلاق")}</Label></Pressable>
+            <Label style={s.heading}>{t("سياسة خصوصية SYNQ")}</Label>
+          </View>
+          <View style={s.card}>
+            <Label style={s.heading}>{t("البيانات التي نحفظها")}</Label>
+            <Label>{t("نحفظ بريدك لتسجيل الدخول، والمهمات والجلسات والشيتات والمواعيد التي تدخلها لتشغيل التطبيق ومزامنتها عبر Firebase.")}</Label>
+          </View>
+          <View style={s.card}>
+            <Label style={s.heading}>{t("التحليلات والملفات")}</Label>
+            <Label>{t("تحليلات Firebase اختيارية ومتوقفة حتى توافق عليها. لا نرسل أسماء المهمات أو بريدك كأحداث تحليلية. النغمة التي تختارها تظل على جهازك.")}</Label>
+          </View>
+          <View style={s.card}>
+            <Label style={s.heading}>{t("الاستخدام والحماية")}</Label>
+            <Label>{t("تُستخدم البيانات لتشغيل SYNQ فقط ولا نبيعها أو نستخدمها للإعلانات. تُنقل البيانات باتصال مشفر ويعالجها Google Firebase كمقدم خدمة.")}</Label>
+          </View>
+          <View style={s.card}>
+            <Label style={s.heading}>{t("الاحتفاظ والحذف")}</Label>
+            <Label>{t("نحتفظ ببياناتك حتى تحذفها أو تحذف حسابك. يمكنك حذف الحساب وكل بياناته من صفحة حسابي، أو التواصل عبر بيانات المطور في صفحة Google Play.")}</Label>
+          </View>
+          <Label style={s.small}>{t("آخر تحديث: 10 أكتوبر 2026")}</Label>
+        </ScrollView></SafeAreaView>
+      </Modal>
+      <Modal visible={deleteAccountOpen} animationType="slide" onRequestClose={() => setDeleteAccountOpen(false)}>
+        <SafeAreaView style={s.screen}>
+          <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+            <ScrollView contentContainerStyle={s.content}>
+              <View style={s.row}>
+                <Pressable onPress={() => setDeleteAccountOpen(false)}><Label style={s.link}>{t("إغلاق")}</Label></Pressable>
+                <Label style={s.heading}>{t("حذف الحساب والبيانات")}</Label>
+              </View>
+              <View style={[s.card, { borderColor: "#7B3641" }]}>
+                <Label style={[s.heading, { color: "#FF93A0" }]}>{t("هذا الإجراء نهائي")}</Label>
+                <Label>{t("سيتم حذف بيانات تسجيل الدخول وكل المهمات والجلسات والشيتات والمواعيد من Firebase، بالإضافة إلى بيانات SYNQ المحلية.")}</Label>
+              </View>
+              <Label>{t("كلمة المرور الحالية")}</Label>
+              <Field value={deletePassword} onChangeText={setDeletePassword} secureTextEntry autoComplete="current-password" />
+              <Pressable disabled={busy} style={[s.button, { backgroundColor: "#FF8091" }, busy && { opacity: .45 }]} onPress={requestAccountDeletion}>
+                <Label style={{ color: C.bg, fontWeight: "900" }}>{busy ? t("لحظة…") : t("حذف نهائي")}</Label>
+              </Pressable>
+            </ScrollView>
+          </KeyboardAvoidingView>
+        </SafeAreaView>
+      </Modal>
+      {/* ── Editors ── */}
+      <Modal visible={manualLogTask !== null} animationType="slide" onRequestClose={() => setManualLogTask(null)}>
+        <SafeAreaView style={s.screen}>
+          <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+            <ScrollView contentContainerStyle={s.content}>
+              <View style={s.row}>
+                <Pressable onPress={() => setManualLogTask(null)}><Label style={s.link}>{t("إغلاق")}</Label></Pressable>
+                <Label style={s.heading}>{t("تسجيل وقت يدوي")}</Label>
+              </View>
+              <Label style={s.heading}>{manualLogTask?.emoji} {manualLogTask?.name}</Label>
+              <Label>{t("التاريخ")}</Label>
+              <Field value={manualDate} onChangeText={setManualDate} keyboardType="numbers-and-punctuation" placeholder="YYYY-MM-DD" />
+              <Label>{t("الدقائق التي عملتها")}</Label>
+              <Field value={manualMinutes} onChangeText={setManualMinutes} keyboardType="number-pad" maxLength={4} />
+              <Button disabled={busy} title={busy ? t("جاري الحفظ…") : t("حفظ الوقت")} onPress={saveManualLog} />
+            </ScrollView>
+          </KeyboardAvoidingView>
+        </SafeAreaView>
+      </Modal>
       <Modal
         visible={globalTaskEditor !== undefined}
         animationType="slide"
@@ -1089,9 +1354,13 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
 }
 export default function App() {
   return (
-    <LanguageProvider>
-      <AppContent />
-    </LanguageProvider>
+    <SafeAreaProvider>
+      <ToastProvider>
+        <LanguageProvider>
+          <AppContent />
+        </LanguageProvider>
+      </ToastProvider>
+    </SafeAreaProvider>
   );
 }
 function AppContent() {
@@ -1108,18 +1377,16 @@ function AppContent() {
     [],
   );
   return (
-    <SafeAreaProvider>
-      <SafeAreaView style={s.screen}>
-        <StatusBar style="light" />
-        {loading ? (
-          <ActivityIndicator color={C.mint} style={{ flex: 1 }} />
-        ) : user ? (
-          <Home key={user.uid} user={user} />
-        ) : (
-          <Login />
-        )}
-      </SafeAreaView>
-    </SafeAreaProvider>
+    <SafeAreaView style={s.screen}>
+      <StatusBar style="light" />
+      {loading ? (
+        <ActivityIndicator color={C.mint} style={{ flex: 1 }} />
+      ) : user ? (
+        <Home key={user.uid} user={user} />
+      ) : (
+        <Login />
+      )}
+    </SafeAreaView>
   );
 }
 const createStyles = (rtl: boolean) =>

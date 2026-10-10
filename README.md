@@ -1,9 +1,9 @@
-# خُطوة · Daily Bloom
+# SYNQ
 
-تطبيق مهام فقط باستخدام React Native + Expo (SDK 54) + TypeScript، بواجهة عربية وإنجليزية، يعمل على Android وiOS.
+تطبيق عربي لإدارة المهمات والوقت وشيتات العمل والمواعيد باستخدام React Native + Expo (SDK 54) + TypeScript، بواجهة عربية وإنجليزية، يعمل على Android وiOS.
 
 
-الواجهة الحالية فيها تبويبات يومي، مهامي، إحصائياتي وحسابي. تم إزالة ميزة العادات بالكامل من الواجهة وتحميل البيانات والإحصائيات، والمهام تشمل الإضافة والتعديل والإنجاز والحذف والمؤقّت مع الاحتفاظ بالبيانات القديمة. تفاصيل السلوك الحالي والتشغيل في [FEATURES.md](./FEATURES.md). الأقسام التاريخية أدناه تشرح البنية والإعداد.
+الواجهة الحالية فيها يومي، مهامي، شيتاتي، مواعيدي، إحصائياتي وحسابي. المهام تشمل الإضافة والتعديل والإنجاز والحذف والمؤقّت مع الاحتفاظ بالبيانات القديمة. تفاصيل السلوك الحالي في [FEATURES.md](./FEATURES.md)، وخطة الإطلاق والمزايا المدفوعة في [ROADMAP.md](./ROADMAP.md).
 
 > **اقرأ الخطوات بالترتيب.** كل خطوة معتمدة على اللي قبلها، وكل مشكلة واجهتنا أول مرة مكتوب حلها في قسم [المشاكل المعروفة وحلولها](#المشاكل-المعروفة-وحلولها).
 
@@ -11,19 +11,126 @@
 
 ## المحتويات
 
-1. [الموجود في المشروع](#الموجود-في-المشروع)
-2. [ملخص الإعداد الحالي](#ملخص-الإعداد-الحالي)
-3. [الخطوة 1: المتطلبات والتثبيت](#الخطوة-1-المتطلبات-والتثبيت)
-4. [الخطوة 2: إعداد Firebase](#الخطوة-2-إعداد-firebase)
-5. [الخطوة 3: التشغيل على موبايل Android](#الخطوة-3-التشغيل-على-موبايل-android)
-6. [الخطوة 4: ربط المشروع بـ EAS](#الخطوة-4-ربط-المشروع-بـ-eas)
-7. [الخطوة 5: رفع ملفات Firebase لـ EAS](#الخطوة-5-رفع-ملفات-firebase-لـ-eas)
-8. [الخطوة 6: أول build من جهازك (التوقيع)](#الخطوة-6-أول-build-من-جهازك-التوقيع)
-9. [الخطوة 7: GitHub Actions](#الخطوة-7-github-actions)
-10. [المشاكل المعروفة وحلولها](#المشاكل-المعروفة-وحلولها)
-11. [قواعد لازم تفضل ماشي عليها](#قواعد-لازم-تفضل-ماشي-عليها)
-12. [طريقة حساب الإحصائيات](#طريقة-حساب-الإحصائيات)
-13. [الاختبار والتحقق](#الاختبار-والتحقق)
+1. [أوامر المشروع](#أوامر-المشروع)
+2. [الموجود في المشروع](#الموجود-في-المشروع)
+3. [ملخص الإعداد الحالي](#ملخص-الإعداد-الحالي)
+4. [الخطوة 1: المتطلبات والتثبيت](#الخطوة-1-المتطلبات-والتثبيت)
+5. [الخطوة 2: إعداد Firebase](#الخطوة-2-إعداد-firebase)
+6. [الخطوة 3: التشغيل على موبايل Android](#الخطوة-3-التشغيل-على-موبايل-android)
+7. [الخطوة 4: ربط المشروع بـ EAS](#الخطوة-4-ربط-المشروع-بـ-eas)
+8. [الخطوة 5: رفع ملفات Firebase لـ EAS](#الخطوة-5-رفع-ملفات-firebase-لـ-eas)
+9. [الخطوة 6: أول build من جهازك (التوقيع)](#الخطوة-6-أول-build-من-جهازك-التوقيع)
+10. [الخطوة 7: GitHub Actions](#الخطوة-7-github-actions)
+11. [المشاكل المعروفة وحلولها](#المشاكل-المعروفة-وحلولها)
+12. [قواعد لازم تفضل ماشي عليها](#قواعد-لازم-تفضل-ماشي-عليها)
+13. [طريقة حساب الإحصائيات](#طريقة-حساب-الإحصائيات)
+14. [الاختبار والتحقق](#الاختبار-والتحقق)
+
+## أوامر المشروع
+
+### أول تشغيل بعد تنزيل المشروع
+
+```bash
+nvm use
+npm ci
+npx expo install --check
+```
+
+لازم يكون `google-services.json` موجودًا في جذر المشروع لتشغيل Android محليًا. تشغيل iOS يحتاج أيضًا `GoogleService-Info.plist`.
+
+### التشغيل اليومي
+
+```bash
+# شغّل Metro للـ development build الموجود على الجهاز
+npm start
+
+# لو Metro علّق أو احتفظ بكاش قديم
+npx expo start --dev-client --clear
+
+# بناء وتشغيل Android محليًا
+npm run android
+
+# بناء وتشغيل iOS محليًا — يحتاج macOS وXcode
+npm run ios
+```
+
+### بعد تغيير مكتبة native أو `app.config.js` أو النغمات
+
+```bash
+npx expo prebuild --platform android --clean
+npm run android
+```
+
+استخدم الأمر السابق بعد تغيير `expo-audio` أو Firebase أو أي ملف داخل `plugins/` أو `assets/sounds/`. خيار `--clean` يعيد إنشاء مجلد Android، لذلك لا تضع تعديلات يدوية مهمة داخله.
+
+### الفحص قبل أي push أو build
+
+```bash
+npm run typecheck
+npm test
+npx expo install --check
+npx expo export --platform android --output-dir /tmp/synq-export --clear
+```
+
+ولتشغيل الفحوصات الأساسية مرة واحدة:
+
+```bash
+npm run typecheck && npm test && npx expo install --check
+```
+
+### Firebase
+
+```bash
+# تسجيل الدخول واختيار مشروع Firebase — أول مرة فقط
+npx firebase-tools login
+npx firebase-tools use --add
+
+# نشر صلاحيات المهمات والشيتات والمواعيد
+npx firebase-tools deploy --only firestore:rules
+```
+
+### معلومات EAS والبيئات
+
+```bash
+npx eas-cli login
+npx eas-cli whoami
+npx eas-cli project:info
+npx eas-cli env:list preview
+npx eas-cli env:list production
+```
+
+### نسخ الاختبار
+
+```bash
+# APK داخلي قابل للتثبيت المباشر على Android
+npx eas-cli build --platform android --profile preview
+
+# نسخة تطوير تحتوي على dev client
+npx eas-cli build --platform android --profile development
+
+# iOS داخلي — يحتاج Apple Developer وإضافة الجهاز
+npx eas-cli device:create
+npx eas-cli build --platform ios --profile preview
+```
+
+### نسخة Google Play
+
+```bash
+# ينتج Android App Bundle بصيغة AAB ويرفعه إلى EAS
+npx eas-cli build --platform android --profile production
+```
+
+نزّل ملف الـ AAB من رابط EAS الناتج، ثم ارفعه أولًا إلى **Internal testing** في Play Console. ملف `eas.json` مهيأ لزيادة رقم إصدار Android تلقائيًا في production.
+
+### بعد سحب تحديث يحتوي تغييرات native
+
+```bash
+git pull
+nvm use
+npm ci
+npx expo prebuild --platform android --clean
+npm run android
+```
 
 ---
 
@@ -33,7 +140,8 @@
 - Firebase Auth وFirestore وFirebase Analytics native؛ موافقة اختيارية للتحليلات من الإعدادات.
 - مهمة باسم ومدة ورمز ولون وأيام تكرار محددة؛ تعديل وأرشفة مع الاحتفاظ بالتاريخ.
 - قائمة اليوم، إنجاز مرة واحدة لكل مهمة/يوم، إلغاء إنجاز، وعدد مرات التنفيذ.
-- مؤقّت start/pause/resume يستعيد الموعد النهائي عند إعادة فتح التطبيق. على Android يعرض إشعارًا باسم المهمة وعدّاد متناقص يعمل خارج التطبيق بعد السماح بالإشعارات؛ يختفي عند انتهاء الوقت، ويلزم تأكيد الإنجاز يدويًا.
+- مؤقّت start/pause/resume يمكن تشغيله أكثر من مرة لنفس المهمة وفي أيام مختلفة؛ إيقافه أو انتهاؤه يسجل جلسة العمل وقيمتها، ويمكن أيضًا تسجيل الوقت يدويًا من غير عداد. على Android يعرض إشعارًا باسم المهمة وعدّادًا متناقصًا خارج التطبيق.
+- شيتات عمل بعنوان وفترة وسعر ساعة بالجنيه أو الدولار، مع سجل الجلسات وإجمالي الساعات والقيمة وتصدير PDF أو Excel من قائمة مشاركة الهاتف.
 - انتظام آخر 30 يوم، streak لكل مهمة، أعمدة الأسبوع، وتقويم إنجاز 30 يوم مع عرض اليوم وتعديل إنجازه.
 - Firestore يعزل بيانات كل مستخدم ويستخدم التخزين المحلي native.
 - GitHub Actions: فحص كل PR، وبناء Android وiOS على EAS مع كل push إلى `main`.
@@ -98,8 +206,11 @@ npx firebase-tools deploy --only firestore:rules
 
 ```text
 users/{uid}                         { analytics: boolean }
-users/{uid}/habits/{habitId}         Habit + schedule revisions
-users/{uid}/entries/{habitId_DATE}   one completion per calendar day
+users/{uid}/globalTasks/{taskId}     المهمة وجدولها ومدتها
+users/{uid}/globalEntries/{id}       إنجاز واحد للمهمة في اليوم
+users/{uid}/workSessions/{sessionId} جلسة عمل مستقلة بالثواني (عداد أو يدوي)
+users/{uid}/sheets/{sheetId}         عنوان وفترة وسعر ومهمات الشيت
+users/{uid}/appointments/{id}        المواعيد المهمة
 ```
 
 القواعد بتمنع أي مستخدم يوصل لبيانات مستخدم تاني. التحقق من الجدول بيتم في العميل، فمتستخدمش البيانات دي لمكافآت مالية أو منافسة من غير تحقق backend.
@@ -305,12 +416,30 @@ npm ls expo-font               # لازم تبقى نسخة واحدة "deduped"
 **العَرَض:** warning في build الـ iOS.
 **الحل (اتعمل):** ضفنا `infoPlist: { ITSAppUsesNonExemptEncryption: false }` في `ios` جوه `app.config.js`.
 
+### 8. خطأ قديم: `Could not find any matches for app.notifee:core:+`
+
+**العَرَض:** Android يفشل عند `:app:processDebugResources`، والمسارات التي بحث فيها Gradle تشير إلى اسم قديم لمجلد المشروع أو إلى `android/node_modules`.
+
+**السبب:** مستودع Notifee عبارة عن Maven repository محلي داخل `node_modules`. استخدام مسار مطلق يجعله يتعطل بعد نقل المشروع، والمسار النسبي يُحسب من `android/app`.
+
+**الحل الحالي:** تم استبدال Notifee غير المُصانة بـ `expo-notifications` الرسمية، لذلك Maven repository الإضافي لم يعد موجودًا. بعد سحب التحديث شغّل `npm ci` ثم أعد `prebuild`.
+
+لو مجلد `android` كان متولد قبل الإصلاح، حدّثه ثم ابنِ المشروع:
+
+```bash
+npx expo prebuild --platform android --no-install
+npm run android
+```
+
+لا ترجع لإضافة Notifee أو مسار Maven مطلق؛ إشعارات المؤقت الآن من Expo Notifications.
+
 ### رسائل تقدر تتجاهلها
 
 - `! No git repo found` / `Continue with uncommitted changes?`: الرسالة دي كانت بتظهر قبل ما المشروع يبقى git repo.
 - `Warning: Failed to save: Our services aren't available right now` في expo-github-action: ده cache بتاع GitHub وملوش علاقة بالـ build.
 - `Error: The process '.../eas' failed with exit code 1`: سطر عام بيظهر مع أي فشل. **السبب الحقيقي دايمًا في السطور اللي فوقه.**
 - `npm audit` vulnerabilities: تحذيرات في dev dependencies. **متشغّلش `npm audit fix --force`** لأنه ممكن يكسر توافق SDK 54.
+- تحذيرات `Deprecated Gradle features` وتحذيرات namespace داخل المكتبات: لا تمنع البناء الحالي. عالجها فقط عند ترقية Expo/React Native/Gradle، ولا تعدّل ملفات `node_modules` يدويًا.
 
 ---
 
@@ -349,6 +478,8 @@ npm ls expo-font               # لازم تبقى نسخة واحدة "deduped"
 npm run typecheck
 npm test
 npx expo install --check
+# أو كل الفحوصات السابقة معًا
+npm run validate
 ```
 
 اختبارات منطق الإحصائيات بتغطي تغيير الجدول والأرشفة وأيام الراحة وعدم تكرار الإنجاز وحدود الشهر.
@@ -357,9 +488,9 @@ npx expo install --check
 
 ---
 
-## إضافات لاحقة مفيدة
+## قبل Google Play
 
-الإشعارات المحلية وتحديد وقت لكل عادة، وتصدير البيانات وحذف الحساب ذاتيًا، ومشاركة تحديات اختيارية. قبل نشر التطبيق للناس ضيف سياسة خصوصية، وطريقة لحذف الحساب والبيانات، وإفصاحات المتاجر المطلوبة.
+راجع [PLAY_STORE_CHECKLIST.md](./PLAY_STORE_CHECKLIST.md) و[DATA_SAFETY.md](./DATA_SAFETY.md). حذف الحساب وسياسة الخصوصية موجودان داخل التطبيق، وصفحات الويب الجاهزة موجودة في `docs/` وتحتاج فقط بريد الدعم والنشر على رابط HTTPS عام.
 
 ## المراجع
 

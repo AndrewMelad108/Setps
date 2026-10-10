@@ -1,63 +1,29 @@
 rules_version = '2';
+
 service cloud.firestore {
- match /databases/{database}/documents {
-  function owner(uid) { return request.auth != null && request.auth.uid == uid; }
-  match /users/{uid} {
-   allow read: if owner(uid);
-   allow create, update: if owner(uid) && request.resource.data.keys().hasOnly(['analytics']) && request.resource.data.analytics is bool;
-   match /habits/{id} {
-    allow read: if owner(uid);
-    allow delete: if owner(uid)
-     && resource.data.schedules[resource.data.schedules.size() - 1].days.toSet().size() < 7;
-    allow create, update: if owner(uid)
-     && request.resource.data.keys().hasOnly(['id','name','emoji','color','createdDate','archivedDate','schedules'])
-     && request.resource.data.id == id
-     && request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 60
-     && request.resource.data.emoji is string && request.resource.data.color is string
-     && request.resource.data.createdDate is string
-     && (request.resource.data.archivedDate == null || request.resource.data.archivedDate is string)
-     && request.resource.data.schedules is list && request.resource.data.schedules.size() > 0 && request.resource.data.schedules.size() <= 1000;
-   }
-   match /globalTasks/{id} {
-    allow read: if owner(uid);
-    allow delete: if owner(uid) && resource.data.isEssential == false;
-    allow create, update: if owner(uid)
-     && request.resource.data.keys().hasOnly(['id','name','emoji','color','isEssential','days','createdDate','archivedDate','minutes'])
-     && request.resource.data.id == id
-     && request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 60
-     && request.resource.data.emoji is string && request.resource.data.color is string
-     && (!('minutes' in request.resource.data) || (request.resource.data.minutes is int
-       && request.resource.data.minutes >= 1 && request.resource.data.minutes <= 720))
-     && request.resource.data.isEssential is bool
-     && request.resource.data.days is list && request.resource.data.days.size() <= 7
-     && request.resource.data.days.hasOnly([0,1,2,3,4,5,6])
-     && (request.resource.data.isEssential || request.resource.data.days.size() > 0)
-     && request.resource.data.createdDate is string
-     && (request.resource.data.archivedDate == null || request.resource.data.archivedDate is string);
-   }
-   match /globalEntries/{id} {
-    allow read, delete: if owner(uid);
-    allow create, update: if owner(uid)
-     && request.resource.data.keys().hasOnly(['id','globalTaskId','date','minutes'])
-     && request.resource.data.id == id
-     && request.resource.data.globalTaskId is string
-     && (!('minutes' in request.resource.data) || (request.resource.data.minutes is int
-       && request.resource.data.minutes >= 1 && request.resource.data.minutes <= 720))
-     && request.resource.data.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
-     && id == request.resource.data.globalTaskId + '_' + request.resource.data.date
-     && exists(/databases/$(database)/documents/users/$(uid)/globalTasks/$(request.resource.data.globalTaskId));
-   }
-   match /entries/{id} {
-    allow read, delete: if owner(uid);
-    allow create, update: if owner(uid)
-     && request.resource.data.keys().hasOnly(['id','habitId','date','minutes'])
-     && request.resource.data.id == id
-     && request.resource.data.habitId is string
-     && request.resource.data.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
-     && id == request.resource.data.habitId + '_' + request.resource.data.date
-     && request.resource.data.minutes is int && request.resource.data.minutes > 0 && request.resource.data.minutes <= 720
-     && exists(/databases/$(database)/documents/users/$(uid)/habits/$(request.resource.data.habitId));
-   }
+  match /databases/{database}/documents {
+    function isOwner(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
+    match /users/{uid} {
+      // Every signed-in user can only access their own profile.
+      allow read, write: if isOwner(uid);
+
+      // Only collections used by SYNQ are accessible.
+      match /{collection}/{document} {
+        allow read, write: if isOwner(uid) && collection in [
+          'globalTasks',
+          'globalEntries',
+          'workSessions',
+          'sheets',
+          'appointments',
+          // Legacy collections are accessible so account deletion can remove
+          // data created by older versions of the app.
+          'habits',
+          'entries'
+        ];
+      }
+    }
   }
- }
 }
