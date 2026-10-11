@@ -63,12 +63,11 @@ import {
 } from "./src/firebase";
 import {
   dateKey,
-  shift,
   metrics,
   range,
   streak,
   globalTaskDue,
-  parseMinutes,
+  durationMinutes,
   GlobalTask,
   GlobalTaskEntry,
   WorkSheet,
@@ -78,10 +77,10 @@ import {
 } from "./src/model";
 import { LanguageProvider, useLanguage, Translator } from "./src/i18n";
 import { requestTimerPermission, syncTimerNotification } from "./src/timerNotifications";
+import { requestAppointmentNotificationPermission, syncAppointmentNotifications } from "./src/appointmentNotifications";
 import { TaskItem, taskList, visibleTasks, taskStatisticsData } from "./src/tasks";
 import { restoreTaskTimer } from "./src/timerState";
 import { CalendarPanel, SheetsPanel } from "./src/FeaturePanels";
-import { SoundChoice, deleteSoundData, loadSound, pickCustomSound, playFinishSound, saveSound, sounds } from "./src/sounds";
 import { ToastInput, ToastProvider, useToast } from "./src/Toast";
 const C = {
   bg: "#0B1017",
@@ -93,7 +92,6 @@ const C = {
   purple: "#C4B5FD",
 };
 
-const emojis = ["🌿", "📖", "💪", "💧", "🧠", "🎨", "💻", "🧘"];
 const colors = ["#B5F4CB", "#C4B5FD", "#FDCB92", "#9ACAFB"];
 const error = (e: unknown, t: Translator, showToast: (input: ToastInput) => void) => {
   const code = (e as { code?: string })?.code || "";
@@ -298,7 +296,7 @@ type Timer = {
   remaining: number;
   end: number | null;
   sessionId: string;
-  plannedSeconds: number;
+  mode: "stopwatch";
 };
 function Home({ user }: { user: FirebaseAuthTypes.User }) {
   const { t, language } = useLanguage();
@@ -315,27 +313,28 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
   ];
   const [filter, setFilter] = useState<"all" | "done" | "pending">("all"),
     [query, setQuery] = useState(""),
-    [tab, setTab] = useState<"today" | "tasks" | "sheets" | "calendar" | "stats" | "settings">("today"),
+    [tab, setTab] = useState<"today" | "tasks" | "sheets" | "calendar" | "settings">("today"),
     [today, setToday] = useState(dateKey()),
     [busy, setBusy] = useState(false),
     [timer, setTimer] = useState<Timer | null>(null),
     [timerReady, setTimerReady] = useState(false),
     [tick, setTick] = useState(Date.now()),
-    [consent, setConsent] = useState(false),
-    [historyDate, setHistoryDate] = useState(dateKey());
+    [consent, setConsent] = useState(false);
   const [globalTasks, setGlobalTasks] = useState<GlobalTask[]>([]);
   const [globalEntries, setGlobalEntries] = useState<GlobalTaskEntry[]>([]);
   const [sheets, setSheets] = useState<WorkSheet[]>([]);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [appointmentsReady, setAppointmentsReady] = useState(false);
   const [workSessions, setWorkSessions] = useState<WorkSession[]>([]);
   const [selectedAppointmentDate, setSelectedAppointmentDate] = useState(dateKey());
-  const [finishSound, setFinishSound] = useState<SoundChoice>(sounds[0]);
   const [globalReady, setGlobalReady] = useState(false);
   const [globalFailed, setGlobalFailed] = useState(false);
   const [globalEntriesReady, setGlobalEntriesReady] = useState(false);
-  const [gtMinutes, setGtMinutes] = useState("20");
+  const [gtSheetIds, setGtSheetIds] = useState<string[]>([]);
   const [manualLogTask, setManualLogTask] = useState<TaskItem | null>(null);
-  const [manualMinutes, setManualMinutes] = useState("60");
+  const [historyTask, setHistoryTask] = useState<TaskItem | null>(null);
+  const [manualHours, setManualHours] = useState("1");
+  const [manualMinutePart, setManualMinutePart] = useState("0");
   const [manualDate, setManualDate] = useState(dateKey());
   const [privacyOpen, setPrivacyOpen] = useState(false);
   const [deleteAccountOpen, setDeleteAccountOpen] = useState(false);
@@ -366,7 +365,6 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
       .catch(() => {
         if (active) setTimerReady(true);
       });
-    loadSound(user.uid).then(value => { if (active) setFinishSound(value); }).catch(() => {});
     getDoc(doc(db, "users", user.uid))
       .then(async (d) => {
         if (active) {
@@ -421,7 +419,8 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
     }, () => setGlobalFailed(true));
     const f = onSnapshot(appointmentsRef(user.uid), snap => {
       setAppointments(snap.docs.map((d: FirebaseFirestoreTypes.QueryDocumentSnapshot) => d.data() as Appointment));
-    }, () => setGlobalFailed(true));
+      setAppointmentsReady(true);
+    }, () => { setGlobalFailed(true); setAppointmentsReady(true); });
     const g = onSnapshot(workSessionsRef(user.uid), snap => {
       setWorkSessions(snap.docs.map((d: FirebaseFirestoreTypes.QueryDocumentSnapshot) => d.data() as WorkSession));
     }, () => setGlobalFailed(true));
@@ -440,6 +439,11 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
     if (timerReady)
       AsyncStorage.setItem(timerKey, JSON.stringify(timer)).catch(() => {});
   }, [timer, timerReady]);
+  useEffect(() => {
+    if (!appointmentsReady) return;
+    void syncAppointmentNotifications(appointments, language)
+      .catch(() => showToast({ type: "warning", title: t("تعذّر جدولة تنبيه الموعد"), message: t("راجع إذن الإشعارات وإعدادات البطارية في الجهاز.") }));
+  }, [appointments, appointmentsReady, language]);
   const run = async (fn: () => Promise<unknown>): Promise<boolean> => {
     if (busy) return false;
     setBusy(true);
@@ -460,38 +464,26 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
   const summary = metrics(history.tasks, history.entries, today);
   const activeHistoryTasks = history.tasks.filter(task => !task.archivedDate || task.archivedDate > today);
   const todays = tasks.filter(task => task.scheduled);
-  const tasksForDate = (date: string) => taskList(globalTasks, globalEntries, date).filter(task => task.scheduled);
-  const filteredDateTasks = (date: string) => visibleTasks(tasksForDate(date), filter, query);
-  const formatDate = (date: string) => new Date(date + "T12:00:00").toLocaleDateString(
-    language === "ar" ? "ar-EG" : "en-US", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
-  const filters = (date: string) => <View style={{ gap: 8 }}>
-    <Field placeholder={t("ابحث عن مهمة")} accessibilityLabel={t("ابحث عن مهمة")} value={query} onChangeText={setQuery} />
-    <View style={s.wrap}>
-      {(["all", "pending", "done"] as const).map(value => <Pressable key={value}
-        accessibilityRole="button" accessibilityState={{ selected: filter === value }}
-        onPress={() => setFilter(value)} style={[s.chip, filter === value && { backgroundColor: C.mint }]}>
-        <Label style={{ color: filter === value ? C.bg : C.text }}>
-          {t(value === "all" ? "الكل" : value === "done" ? "مكتملة" : "غير مكتملة")} · {visibleTasks(tasksForDate(date), value, "").length}
-        </Label>
-      </Pressable>)}
-    </View>
-  </View>;
-
   const remaining = timer
       ? Math.max(
           0,
-          timer.end ? Math.ceil((timer.end - tick) / 1000) : timer.remaining,
+          timer.end ? timer.remaining + Math.floor((tick - timer.end) / 1000) : timer.remaining,
         )
       : 0;
   const timerName = tasks.find(h => h.id === timer?.taskId)?.name || t("جلسة التركيز");
-  const timerFinished = remaining === 0;
-  const previousRemaining = useRef<number | null>(null);
   const recordedSessions = useRef(new Set<string>());
-  const timerElapsed = (value: Timer, secondsLeft: number) =>
-    Math.max(0, value.plannedSeconds - secondsLeft);
+  const persistWorkSession = async (session: WorkSession) => {
+    await saveWorkSession(user.uid, session);
+    const task = globalTasks.find(item => item.id === session.taskId);
+    if (!task) return;
+    const totalSeconds = workSessions
+      .filter(item => item.taskId === session.taskId && item.id !== session.id)
+      .reduce((total, item) => total + item.seconds, session.seconds);
+    await saveGlobalTask(user.uid, { ...task, minutes: Math.ceil(totalSeconds / 60) });
+  };
   const persistTimerSession = (value: Timer, seconds: number) => {
     if (seconds < 1) return Promise.resolve();
-    return saveWorkSession(user.uid, {
+    return persistWorkSession({
       id: value.sessionId,
       taskId: value.taskId.replace(/^global:/, ""),
       date: value.date,
@@ -501,26 +493,10 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
     });
   };
   useEffect(() => {
-    if (timer && previousRemaining.current !== null && previousRemaining.current > 0 && remaining === 0) {
-      playFinishSound(finishSound);
-    }
-    previousRemaining.current = timer ? remaining : null;
-  }, [remaining, !!timer, finishSound.id, finishSound.uri]);
-  useEffect(() => {
-    if (!timer || remaining !== 0 || recordedSessions.current.has(timer.sessionId)) return;
-    recordedSessions.current.add(timer.sessionId);
-    void persistTimerSession(timer, timerElapsed(timer, remaining))
-      .then(() => showToast({ type: "success", title: t("تم تسجيل الوقت") }))
-      .catch(e => {
-        recordedSessions.current.delete(timer.sessionId);
-        error(e, t, showToast);
-      });
-  }, [timer?.sessionId, remaining]);
-  useEffect(() => {
     if (!timerReady) return;
-    void syncTimerNotification(timerFinished ? null : timer, timerName, language, finishSound.id)
+    void syncTimerNotification(timer, timerName, language)
       .catch(() => showToast({ type: "warning", title: t("تعذّر عرض إشعار المؤقّت"), message: t("المؤقّت شغال داخل التطبيق. جرّب تفعيل الإشعارات من الإعدادات.") }));
-  }, [timer, timerReady, timerName, timerFinished, language, finishSound.id]);
+  }, [timer, timerReady, timerName, language]);
   useEffect(() => () => { void syncTimerNotification(null, "", language).catch(() => {}); }, [user.uid]);
   function mark(task: TaskItem, date = today) {
     if (date > today) return;
@@ -528,10 +504,10 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
     if (!scheduled) return;
     void run(async () => {
       const measured = timer?.taskId === task.id && timer.date === date
-        ? timerElapsed(timer, remaining) : undefined;
+        ? remaining : undefined;
       if (timer?.taskId === task.id && timer.date === date && measured)
         await persistTimerSession(timer, measured);
-      await completeGlobalTask(user.uid, task.source, date, measured);
+      await completeGlobalTask(user.uid, task.source, date);
       if (timer?.taskId === task.id && timer.date === date) setTimer(null);
       void track("task_completed");
       showToast({ type: "success", title: t("تم إنجاز المهمة") });
@@ -549,10 +525,10 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
       setTimer({
         taskId: h.id,
         date: today,
-        remaining: h.minutes * 60,
-        end: Date.now() + h.minutes * 60000,
+        remaining: 0,
+        end: Date.now(),
         sessionId: `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-        plannedSeconds: h.minutes * 60,
+        mode: "stopwatch",
       });
     };
     if (timer && timer.taskId !== h.id)
@@ -565,7 +541,7 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
   function stopAndSaveTimer() {
     if (!timer) return;
     const current = { ...timer, remaining, end: null };
-    const elapsed = timerElapsed(current, remaining);
+    const elapsed = remaining;
     if (elapsed < 1) return showToast({ type: "warning", title: t("لا يوجد وقت لتسجيله") });
     setTimer(current);
     void run(async () => {
@@ -578,15 +554,16 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
   function openManualLog(task: TaskItem, date = today) {
     setManualLogTask(task);
     setManualDate(date);
-    setManualMinutes("60");
+    setManualHours("1");
+    setManualMinutePart("0");
   }
   function saveManualLog() {
     if (!manualLogTask) return;
-    const minutes = parseMinutes(manualMinutes);
+    const minutes = durationMinutes(manualHours, manualMinutePart);
     if (!isDateKey(manualDate) || manualDate > today || !Number.isInteger(minutes) || minutes < 1 || minutes > 1440)
-      return showToast({ type: "warning", title: t("راجع الوقت"), message: t("اكتب تاريخًا صحيحًا ومدة من ١ إلى ١٤٤٠ دقيقة.") });
+      return showToast({ type: "warning", title: t("راجع الوقت"), message: t("اكتب تاريخًا صحيحًا، وساعات ودقائق صحيحة بحد أقصى ٢٤ ساعة.") });
     void run(async () => {
-      await saveWorkSession(user.uid, {
+      await persistWorkSession({
         id: `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         taskId: manualLogTask.source.id,
         date: manualDate,
@@ -598,6 +575,23 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
       showToast({ type: "success", title: t("تم تسجيل الوقت") });
     });
   }
+  function removeWorkSession(session: WorkSession) {
+    if (!historyTask) return;
+    Alert.alert(t("حذف تسجيل الوقت؟"), t("هيتم خصم الوقت من إجمالي التاسك والشيتات المرتبطة."), [
+      { text: t("رجوع"), style: "cancel" },
+      { text: t("حذف"), style: "destructive", onPress: () => void run(async () => {
+        await deleteWorkSession(user.uid, session.id);
+        const task = globalTasks.find(item => item.id === session.taskId);
+        if (task) {
+          const totalSeconds = workSessions
+            .filter(item => item.taskId === session.taskId && item.id !== session.id)
+            .reduce((total, item) => total + item.seconds, 0);
+          await saveGlobalTask(user.uid, { ...task, minutes: Math.ceil(totalSeconds / 60) });
+        }
+        showToast({ type: "success", title: t("تم حذف تسجيل الوقت") });
+      }) },
+    ]);
+  }
   function requestAccountDeletion() {
     if (!deletePassword)
       return showToast({ type: "warning", title: t("اكتب كلمة المرور الحالية") });
@@ -608,7 +602,6 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
         const credential = EmailAuthProvider.credential(user.email, deletePassword);
         await reauthenticateWithCredential(user, credential);
         await deleteAccountData(user.uid);
-        await deleteSoundData(user.uid).catch(() => {});
         await AsyncStorage.removeItem(timerKey).catch(() => {});
         await syncTimerNotification(null, "", language).catch(() => {});
         await setAnalyticsCollectionEnabled(analytics, false).catch(() => {});
@@ -622,7 +615,7 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
   function openGlobalTask(task: GlobalTask | null) {
     setGlobalTaskEditor(task);
     setGtName(task?.name || "");
-    setGtMinutes(String(task?.minutes ?? 20));
+    setGtSheetIds(task ? sheets.filter(sheet => sheet.taskIds.includes(task.id)).map(sheet => sheet.id) : []);
     setGtEmoji(task?.emoji || "✅");
     setGtColor(task?.color || colors[0]);
     setGtIsEssential(task?.isEssential ?? false);
@@ -632,18 +625,16 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
     if (
       !gtName.trim() ||
       gtName.trim().length > 60 ||
-      !Number.isInteger(parseMinutes(gtMinutes)) ||
-      parseMinutes(gtMinutes) < 1 || parseMinutes(gtMinutes) > 720 ||
       (!gtIsEssential && !gtDays.length)
     )
-      return showToast({ type: "warning", title: t("راجع بيانات المهمة"), message: t("الاسم من ١ إلى ٦٠ حرف، المدة من ١ إلى ٧٢٠ دقيقة، واختار يوم واحد على الأقل.") });
+      return showToast({ type: "warning", title: t("راجع بيانات المهمة"), message: t("الاسم من ١ إلى ٦٠ حرف، واختار يوم واحد على الأقل.") });
     await run(async () => {
       const task: GlobalTask = {
         id:
           globalTaskEditor?.id ||
           `gt_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
         name: gtName.trim(),
-        minutes: parseMinutes(gtMinutes),
+        minutes: globalTaskEditor?.minutes ?? 0,
         emoji: gtEmoji,
         color: gtColor,
         isEssential: gtIsEssential,
@@ -652,6 +643,17 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
         archivedDate: null,
       };
       await saveGlobalTask(user.uid, task);
+      await Promise.all(sheets.map(sheet => {
+        const selected = gtSheetIds.includes(sheet.id);
+        const alreadySelected = sheet.taskIds.includes(task.id);
+        if (selected === alreadySelected) return Promise.resolve();
+        return saveSheet(user.uid, {
+          ...sheet,
+          taskIds: selected
+            ? [...sheet.taskIds, task.id]
+            : sheet.taskIds.filter(id => id !== task.id),
+        });
+      }));
       setGlobalTaskEditor(undefined);
       void track("global_task_saved");
       showToast({ type: "success", title: t("تم حفظ المهمة") });
@@ -663,6 +665,8 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
       { text: t("رجوع"), style: "cancel" },
       { text: t("حذف"), style: "destructive", onPress: () => void run(async () => {
         await deleteGlobalTask(user.uid, task);
+        await Promise.all(sheets.filter(sheet => sheet.taskIds.includes(task.id)).map(sheet =>
+          saveSheet(user.uid, { ...sheet, taskIds: sheet.taskIds.filter(id => id !== task.id) })));
         setGlobalTasks(current => current.filter(item => item.id !== task.id));
         if (timer?.taskId === `global:${task.id}`) setTimer(null);
         setGlobalTaskEditor(undefined);
@@ -681,41 +685,113 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
       }) },
     ]);
   }
-  const taskCard = (task: TaskItem, date = today) => (
-    <View key={task.id} style={[s.card, { borderLeftWidth: 3, borderLeftColor: task.color }]}>
-      <View style={s.row}>
-        <View style={{ flex: 1 }}>
-          <Label style={s.heading}>{task.name}</Label>
-          <Label style={s.small}>{task.minutes} {t("دقيقة")} · {task.isEssential ? t("مهمة أساسية (كل يوم)") : t("مهمة مرنة (أيام معينة)")}</Label>
+  const loggedDuration = (seconds: number) => {
+    const totalMinutes = Math.floor(seconds / 60);
+    return `${Math.floor(totalMinutes / 60)} ${t("ساعة")} ${totalMinutes % 60} ${t("دقيقة")}`;
+  };
+  const stopwatchLabel = (seconds: number) =>
+    `${String(Math.floor(seconds / 3600)).padStart(2, "0")}:${String(Math.floor(seconds / 60) % 60).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+  const taskCard = (task: TaskItem, date = today) => {
+    const daySeconds = workSessions
+      .filter(session => session.taskId === task.source.id && session.date === date)
+      .reduce((total, session) => total + session.seconds, 0);
+    const totalSeconds = workSessions
+      .filter(session => session.taskId === task.source.id)
+      .reduce((total, session) => total + session.seconds, 0);
+    const linkedSheets = sheets.filter(sheet => sheet.taskIds.includes(task.source.id));
+    return (
+      <View key={task.id} style={[s.taskCard, { borderTopColor: task.color }]}>
+        <View style={s.row}>
+          <View style={[s.taskIcon, { backgroundColor: `${task.color}20` }]}>
+            <Label style={{ fontSize: 25 }}>{task.emoji}</Label>
+          </View>
+          <View style={{ flex: 1, gap: 5 }}>
+            <Label style={s.heading}>{task.name}</Label>
+            <View style={s.taskBadgeRow}>
+              <View style={[s.statusBadge, task.done && { backgroundColor: "#234636" }]}>
+                <Label style={[s.badgeText, task.done && { color: C.mint }]}>
+                  {task.done ? t("✓ تم الإنجاز") : task.scheduled ? t("غير مكتملة") : t("غير مجدولة")}
+                </Label>
+              </View>
+              <Label style={s.small}>{task.isEssential ? t("مهمة أساسية (كل يوم)") : t("مهمة مرنة (أيام معينة)")}</Label>
+            </View>
+          </View>
+          {task.scheduled && <Pressable
+            accessibilityLabel={task.done ? t("إلغاء الإنجاز") : t("○ علّم كمكتملة")}
+            disabled={busy || date > today}
+            style={[s.taskCheck, task.done && { backgroundColor: C.mint, borderColor: C.mint }]}
+            onPress={() => toggleTask(task, date)}
+          >
+            <Ionicons name={task.done ? "checkmark" : "ellipse-outline"} size={21} color={task.done ? C.bg : C.muted} />
+          </Pressable>}
         </View>
-        <Label style={{ fontSize: 25 }}>{task.emoji}</Label>
+
+        <View style={s.taskMetrics}>
+          <View style={s.taskMetric}>
+            <Label style={s.metricValue}>{loggedDuration(daySeconds)}</Label>
+            <Label style={s.small}>{t(date === today ? "وقت مسجل اليوم" : "وقت مسجل")}</Label>
+          </View>
+          <View style={s.taskMetric}>
+            <Label style={s.metricValue}>{loggedDuration(totalSeconds)}</Label>
+            <Label style={s.small}>{t("إجمالي وقت المهمة")}</Label>
+          </View>
+        </View>
+
+        {!!linkedSheets.length && <View style={s.sheetLine}>
+          <Ionicons name="documents-outline" size={15} color={C.muted} />
+          <Label style={[s.small, { flex: 1 }]}>{linkedSheets.map(sheet => sheet.title).join(" · ")}</Label>
+        </View>}
+
+        <View style={s.taskActions}>
+          {date === today && task.scheduled && <Pressable disabled={!timerReady || busy} style={[s.actionButton, s.actionPrimary]} onPress={() => start(task)}>
+            <Ionicons name="play" size={16} color={C.bg} />
+            <Label style={s.actionPrimaryText}>{t("ابدأ العداد")}</Label>
+          </Pressable>}
+          {date <= today && <Pressable disabled={busy} style={s.actionButton} onPress={() => openManualLog(task, date)}>
+            <Ionicons name="add-circle-outline" size={17} color={C.mint} />
+            <Label style={s.link}>{t("أضف وقت يدوي")}</Label>
+          </Pressable>}
+        </View>
+        <View style={s.taskFooter}>
+          <Pressable style={s.footerAction} disabled={busy} onPress={() => setHistoryTask(task)}>
+            <Ionicons name="time-outline" size={18} color={C.mint} />
+            <Label style={s.link}>{t("سجل التاسك")}</Label>
+          </Pressable>
+          <Pressable style={s.footerAction} disabled={busy} onPress={() => openGlobalTask(task.source)}>
+            <Ionicons name="create-outline" size={18} color={C.mint} />
+            <Label style={s.link}>{t("تعديل")}</Label>
+          </Pressable>
+          {!task.isEssential && <Pressable style={s.footerAction} disabled={busy} accessibilityLabel={`${t("حذف")} ${task.name}`} onPress={() => removeGlobalTask(task.source)}>
+            <Ionicons name="trash-outline" size={18} color="#FF8091" />
+            <Label style={{ color: "#FF8091", fontSize: 13 }}>{t("حذف")}</Label>
+          </Pressable>}
+        </View>
       </View>
-      <Label style={{ color: task.done ? C.mint : C.muted }}>
-        {task.done ? t("✓ تم الإنجاز") : task.scheduled ? t("غير مكتملة") : t("غير مجدولة")}
-      </Label>
-      {workSessions.some(session => session.taskId === task.source.id && session.date === date) && <Label style={s.small}>
-        {t(date === today ? "وقت مسجل اليوم" : "وقت مسجل")}: {(workSessions.filter(session => session.taskId === task.source.id && session.date === date)
-          .reduce((total, session) => total + session.seconds, 0) / 3600).toFixed(2)} {t("ساعة")}
-      </Label>}
-      <View style={s.wrap}>
-        {task.scheduled && <Pressable disabled={busy || date > today} style={s.pill} onPress={() => toggleTask(task, date)}>
-          <Label style={s.link}>{task.done ? t("إلغاء الإنجاز") : t("○ علّم كمكتملة")}</Label>
-        </Pressable>}
-        {date === today && task.scheduled && !task.done && <Pressable disabled={!timerReady || busy} style={s.pill} onPress={() => start(task)}>
-          <Label style={s.link}>{t("ابدأ التركيز ▷")}</Label>
-        </Pressable>}
-        {date <= today && <Pressable disabled={busy} style={s.pill} onPress={() => openManualLog(task, date)}>
-          <Label style={s.link}>{t("سجل وقت")}</Label>
-        </Pressable>}
-        <Pressable style={s.pill} disabled={busy} onPress={() => openGlobalTask(task.source)}>
-          <Label style={s.link}>{t("تعديل")}</Label>
+    );
+  };
+  const todayTaskCard = (task: TaskItem) => {
+    const seconds = workSessions.filter(session => session.taskId === task.source.id && session.date === today)
+      .reduce((total, session) => total + session.seconds, 0);
+    return <View key={task.id} style={[s.todayTaskCard, { borderTopColor: task.color }]}>
+      <View style={s.row}>
+        <View style={[s.taskIcon, { width: 44, height: 44, borderRadius: 14, backgroundColor: `${task.color}20` }]}><Label style={{ fontSize: 22 }}>{task.emoji}</Label></View>
+        <View style={{ flex: 1, gap: 2 }}><Label style={s.heading}>{task.name}</Label><Label style={s.small}>{t("وقت مسجل اليوم")}: <Text style={{ color: C.text }}>{loggedDuration(seconds)}</Text></Label></View>
+        <Pressable disabled={busy} style={[s.taskCheck, task.done && { backgroundColor: C.mint, borderColor: C.mint }]} onPress={() => toggleTask(task)}>
+          <Ionicons name={task.done ? "checkmark" : "ellipse-outline"} size={21} color={task.done ? C.bg : C.muted} />
         </Pressable>
-        {!task.isEssential && <Pressable style={s.pill} disabled={busy} accessibilityLabel={`${t("حذف")} ${task.name}`} onPress={() => removeGlobalTask(task.source)}>
-          <Label style={{ color: "#ff6b6b" }}>{t("حذف")}</Label>
-        </Pressable>}
       </View>
-    </View>
-  );
+      <View style={s.taskActions}>
+        <Pressable disabled={!timerReady || busy} style={[s.actionButton, s.actionPrimary]} onPress={() => start(task)}><Ionicons name="play" size={15} color={C.bg} /><Label style={s.actionPrimaryText}>{t("ابدأ العداد")}</Label></Pressable>
+        <Pressable disabled={busy} style={s.actionButton} onPress={() => openManualLog(task)}><Ionicons name="add-circle-outline" size={17} color={C.mint} /><Label style={s.link}>{t("أضف وقت يدوي")}</Label></Pressable>
+        <Pressable accessibilityLabel={t("السجل")} disabled={busy} style={s.iconAction} onPress={() => setHistoryTask(task)}><Ionicons name="time-outline" size={20} color={C.mint} /></Pressable>
+        <Pressable accessibilityLabel={t("تعديل")} disabled={busy} style={s.iconAction} onPress={() => openGlobalTask(task.source)}><Ionicons name="create-outline" size={20} color={C.mint} /></Pressable>
+      </View>
+    </View>;
+  };
+  const historySessions = historyTask
+    ? workSessions.filter(session => session.taskId === historyTask.source.id).sort((a, b) => b.createdAt - a.createdAt)
+    : [];
+  const historySeconds = historySessions.reduce((total, session) => total + session.seconds, 0);
   return (
     <View style={{ flex: 1 }}>
       <ScrollView contentContainerStyle={s.content}>
@@ -731,7 +807,7 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
           </View>
         </View>
         <Label style={[s.heroTitle, { marginTop: 26 }]}>
-          {tab === "today" ? t("يوم جديد، فرصة جديدة.") : tab === "tasks" ? t("مهامي") : tab === "sheets" ? t("شيتات العمل") : tab === "calendar" ? t("مواعيدي") : tab === "stats" ? t("بص على اللي حققته.") : t("مساحتك الخاصة.")}
+          {tab === "today" ? t("يوم جديد، فرصة جديدة.") : tab === "tasks" ? t("مهامي") : tab === "sheets" ? t("شيتات العمل") : tab === "calendar" ? t("مواعيدي") : t("مساحتك الخاصة.")}
         </Label>
         <Label style={s.subtitle}>
           {new Date(today + "T12:00:00").toLocaleDateString(
@@ -783,31 +859,14 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
                       : t("مش لازم تكون مثالي، المهم تستمر.")}
                   </Label>
                 </LinearGradient>
-                <View style={s.card}>
-                  <Label style={s.heading}>{t("سجل الأيام")}</Label>
-                  <View style={[s.wrap, { gap: 6 }]}>
-                    {range(today, 7).map(date => {
-                      const stats = metrics(history.tasks, history.entries, date, 1);
-                      return <Pressable key={date} accessibilityRole="button"
-                        accessibilityLabel={formatDate(date) + ": " + stats.done + "/" + stats.expected + " " + t("مكتملة")}
-                        onPress={() => { setHistoryDate(date); setFilter("all"); setQuery(""); setTab("stats"); }}
-                        style={[s.chip, { minWidth: 54, alignItems: "center", borderWidth: 1, borderColor: date === today ? C.mint : C.line }]}>
-                        <Label style={s.small}>{days[new Date(date + "T12:00:00").getDay()]}</Label>
-                        <Label style={{ color: stats.expected && stats.done === stats.expected ? C.mint : C.text }}>{stats.done}/{stats.expected}</Label>
-                      </Pressable>;
-                    })}
-                  </View>
-                </View>
                 <View style={s.row}>
                   <Pressable onPress={() => openGlobalTask(null)}>
                     <Label style={s.link}>{t("＋ مهمة جديدة")}</Label>
                   </Pressable>
                   <Label style={s.heading}>{t("خطة النهارده")}</Label>
                 </View>
-                {filters(today)}
                 <Label style={s.small}>{t("باقي اليوم")}: {dayStats.expected - dayStats.done}</Label>
-                {filteredDateTasks(today).map(h => taskCard(h, today))}
-                {!!todays.length && !filteredDateTasks(today).length && <Label style={s.subtitle}>{t("لا توجد مهام مطابقة")}</Label>}
+                {todays.map(todayTaskCard)}
                 {!todays.length && (
                   <View style={s.card}>
                     <Label style={{ fontSize: 40 }}>🌱</Label>
@@ -817,6 +876,32 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
                     <Button title={t("أضف أول مهمة")} onPress={() => openGlobalTask(null)} />
                   </View>
                 )}
+                <Label style={s.heroTitle}>{t("إحصائياتي")}</Label>
+                <View style={s.card}>
+                  <Label>{t("المنجز هذا الأسبوع")}: {metrics(history.tasks, history.entries, today, 7).done}</Label>
+                  <Label>{t("أفضل سلسلة حالية")}: {Math.max(0, ...activeHistoryTasks.map(h => streak(h, history.entries, today)))} {t("يوم")}</Label>
+                </View>
+                <View style={s.statRow}>
+                  {[
+                    [`${summary.rate}%`, t("انتظام آخر ٣٠ يوم")],
+                    [`${history.entries.length}`, t("إجمالي الإنجازات")],
+                    [loggedDuration(workSessions.reduce((n, session) => n + session.seconds, 0)), t("إجمالي وقت العمل")],
+                  ].map(([value, label]) => <View key={label} style={[s.card, { flex: 1, padding: 12 }]}>
+                    <Label style={[s.heading, { color: C.mint, fontSize: 24 }]}>{value}</Label>
+                    <Label style={[s.small, { fontSize: 10 }]}>{label}</Label>
+                  </View>)}
+                </View>
+                <View style={s.card}>
+                  <Label style={s.heading}>{t("إيقاع الأسبوع")}</Label>
+                  <View style={s.chart}>{range(today, 7).map(d => {
+                    const m = metrics(history.tasks, history.entries, d, 1);
+                    return <View key={d} style={s.barColumn}>
+                      <Label style={{ fontSize: 10, color: C.muted }}>{m.expected ? `${m.rate}%` : "—"}</Label>
+                      <View style={s.barTrack}><View style={[s.bar, { height: `${m.rate}%`, backgroundColor: d === today ? C.mint : C.purple }]} /></View>
+                      <Label style={{ fontSize: 10 }}>{days[new Date(d + "T12:00:00").getDay()]}</Label>
+                    </View>;
+                  })}</View>
+                </View>
               </>
             )}
             {tab === "tasks" && (
@@ -844,7 +929,6 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
                 busy={busy}
                 onSave={sheet => run(() => saveSheet(user.uid, sheet))}
                 onDelete={id => run(() => deleteSheet(user.uid, id))}
-                onDeleteSession={id => run(() => deleteWorkSession(user.uid, id))}
               />
             )}
             {tab === "calendar" && (
@@ -854,135 +938,20 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
                 setSelectedDate={setSelectedAppointmentDate}
                 t={t}
                 busy={busy}
-                onSave={item => run(() => saveAppointment(user.uid, item))}
+                onSave={item => run(async () => {
+                  await saveAppointment(user.uid, item);
+                  const granted = await requestAppointmentNotificationPermission();
+                  if (granted) await syncAppointmentNotifications(
+                    [...appointments.filter(appointment => appointment.id !== item.id), item], language,
+                  ).catch(() => showToast({ type: "warning", title: t("تعذّر جدولة تنبيه الموعد"), message: t("راجع إذن الإشعارات وإعدادات البطارية في الجهاز.") }));
+                  else showToast({ type: "warning", title: t("فعّل إشعارات المواعيد"), message: t("من غير إذن الإشعارات الموعد مش هيرن.") });
+                })}
                 onDelete={id => run(() => deleteAppointment(user.uid, id))}
               />
-            )}
-            {tab === "stats" && (
-              <>
-                <View style={s.card}>
-                  <Label>{t("المنجز هذا الأسبوع")}: {metrics(history.tasks, history.entries, today, 7).done}</Label>
-                  <Label>{t("أفضل سلسلة حالية")}: {Math.max(0, ...activeHistoryTasks.map(h => streak(h, history.entries, today)))} {t("يوم")}</Label>
-                </View>
-                <View style={s.statRow}>
-                  {[
-                    [`${summary.rate}%`, t("انتظام آخر ٣٠ يوم")],
-                    [`${history.entries.length}`, t("إجمالي الإنجازات")],
-                    [
-                      `${history.entries.reduce((n, e) => n + e.minutes, 0)}`,
-                      t("دقائق مخططة منجزة"),
-                    ],
-                  ].map(([v, l]) => (
-                    <View key={l} style={[s.card, { flex: 1, padding: 12 }]}>
-                      <Label
-                        style={[s.heading, { color: C.mint, fontSize: 24 }]}
-                      >
-                        {v}
-                      </Label>
-                      <Label style={[s.small, { fontSize: 10 }]}>{l}</Label>
-                    </View>
-                  ))}
-                </View>
-                <View style={s.card}>
-                  <Label style={s.heading}>{t("إيقاع الأسبوع")}</Label>
-                  <View style={s.chart}>
-                    {range(today, 7).map((d) => {
-                      const m = metrics(history.tasks, history.entries, d, 1);
-                      return (
-                        <View key={d} style={s.barColumn}>
-                          <Label style={{ fontSize: 10, color: C.muted }}>
-                            {m.expected ? m.rate + "%" : "—"}
-                          </Label>
-                          <View style={s.barTrack}>
-                            <View
-                              style={[
-                                s.bar,
-                                {
-                                  height: `${m.rate}%`,
-                                  backgroundColor:
-                                    d === today ? C.mint : C.purple,
-                                },
-                              ]}
-                            />
-                          </View>
-                          <Label style={{ fontSize: 10 }}>
-                            {days[new Date(d + "T12:00:00").getDay()]}
-                          </Label>
-                        </View>
-                      );
-                    })}
-                  </View>
-                </View>
-                <View style={s.card}>
-                  <Label style={s.heading}>{t("كل خطوة بتفرق")}</Label>
-                  <Label style={s.small}>
-                    {" "}{t("آخر ٣٠ يوم · اضغط على يوم لعرض تفاصيله")}{" "}</Label>
-                  <View style={s.heatmap}>
-                    {range(today, 30).map((d) => {
-                      const m = metrics(history.tasks, history.entries, d, 1);
-                      return (
-                        <Pressable
-                          accessibilityRole="button"
-                          accessibilityState={{ selected: historyDate === d }}
-                          accessibilityLabel={formatDate(d) + ": " + m.done + "/" + m.expected + " " + t("مكتملة")}
-                          key={d}
-                          onPress={() => setHistoryDate(d)}
-                          style={[
-                            s.cell,
-                            {
-                              backgroundColor: !m.done
-                                ? C.line
-                                : m.rate === 100
-                                  ? C.mint
-                                  : "#528D70",
-                              borderWidth: historyDate === d ? 2 : 0,
-                              borderColor: "#FFFFFF",
-                            },
-                          ]}
-                        />
-                      );
-                    })}
-                  </View>
-                  <Label>{formatDate(historyDate)}</Label>
-                </View>
-                <View style={s.card}>
-                  <Label style={s.heading}>{t("سجل الأيام")}</Label>
-                  <View style={s.row}>
-                    <Button secondary title={t("اليوم السابق")} onPress={() => setHistoryDate(shift(historyDate, -1))} />
-                    <Button secondary title={t("اليوم التالي")} disabled={historyDate >= today} onPress={() => setHistoryDate(shift(historyDate, 1))} />
-                  </View>
-                  <Label>{formatDate(historyDate)}</Label>
-                  <Button secondary title={t("اليوم")} onPress={() => setHistoryDate(today)} />
-                  <Label>{t("مكتملة")}: {metrics(history.tasks, history.entries, historyDate, 1).done} · {t("غير مكتملة")}: {metrics(history.tasks, history.entries, historyDate, 1).expected - metrics(history.tasks, history.entries, historyDate, 1).done}</Label>
-                  {filters(historyDate)}
-                </View>
-                {filteredDateTasks(historyDate).map(h => taskCard(h, historyDate))}
-                {!filteredDateTasks(historyDate).length && <Label style={s.subtitle}>{t(tasksForDate(historyDate).length > 0 ? "لا توجد مهام مطابقة" : "لا توجد مهام مجدولة لهذا اليوم")}</Label>}
-                <Label style={s.small}>
-                  {" "}{t("الانتظام = الإنجازات ÷ المهام المجدولة. الدقائق هي مدة المهام المنجزة، وليست قياسًا لوقت استخدام الهاتف.")}{" "}</Label>
-              </>
             )}
             {tab === "settings" && (
               <>
                 <LanguageSwitch />
-                <View style={s.card}>
-                  <Label style={s.heading}>{t("نغمة انتهاء المهمة")}</Label>
-                  <Label style={s.small}>{t("اختر نغمة من SYNQ أو حمّل ملفًا صوتيًا من جهازك.")}</Label>
-                  <View style={s.wrap}>
-                    {sounds.map(sound => <Pressable key={sound.id}
-                      style={[s.chip, finishSound.id === sound.id && { backgroundColor: C.mint }]}
-                      onPress={() => void saveSound(user.uid, sound)
-                        .then(() => { setFinishSound(sound); playFinishSound(sound); showToast({ type: "success", title: t("تم اختيار النغمة") }); })
-                        .catch(e => error(e, t, showToast))}>
-                      <Label style={{ color: finishSound.id === sound.id ? C.bg : C.text }}>{t(sound.name as any)}</Label>
-                    </Pressable>)}
-                    <Pressable style={[s.chip, finishSound.id === "custom" && { backgroundColor: C.mint }]}
-                      onPress={() => void pickCustomSound(user.uid).then(sound => { if (sound) { setFinishSound(sound); playFinishSound(sound); showToast({ type: "success", title: t("تم اختيار النغمة") }); } }).catch(() => showToast({ type: "error", title: t("تعذّر تحميل النغمة"), message: t("اختر ملفًا صوتيًا بحجم أقل من 15 MB.") }))}>
-                      <Label style={{ color: finishSound.id === "custom" ? C.bg : C.text }}>{t("تحميل من الجهاز")}</Label>
-                    </Pressable>
-                  </View>
-                  {finishSound.id === "custom" && <Label style={s.small}>{finishSound.name}</Label>}
-                </View>
                 <View style={s.card}>
                   <Label style={s.heading}>{t("حسابي")}</Label>
                   <Label style={s.small}>{user.email}</Label>
@@ -1063,8 +1032,7 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
             <Label>
               {tasks.find((h) => h.id === timer.taskId)?.name ||
                 t("جلسة التركيز")}{" "}
-              · {Math.floor(remaining / 60)}:
-              {String(remaining % 60).padStart(2, "0")}
+              · {stopwatchLabel(remaining)}
             </Label>
             <Pressable
               accessibilityRole="button"
@@ -1073,7 +1041,7 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
                 setTimer({
                   ...timer,
                   remaining,
-                  end: timer.end ? null : Date.now() + remaining * 1000,
+                  end: timer.end ? null : Date.now(),
                 })
               }
             >
@@ -1084,25 +1052,14 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
               />
             </Pressable>
           </View>
-          {remaining > 0 && timerElapsed(timer, remaining) > 0 && (
+          {remaining > 0 && (
             <Button disabled={busy} title={t("إنهاء وتسجيل الوقت")} onPress={stopAndSaveTimer} />
-          )}
-          {remaining === 0 && (
-            <Button
-              disabled={busy}
-              title={t("الجلسة خلصت ✨ سجّل الإنجاز")}
-              onPress={() => {
-                const h = tasks.find((x) => x.id === timer.taskId);
-                if (h) mark(h, timer.date);
-              }}
-            />
           )}
         </View>
       )}
       <View style={s.nav}>
         {([
           ["settings", "options-outline", t("حسابي")],
-          ["stats", "stats-chart-outline", t("إحصائياتي")],
           ["calendar", "calendar-outline", t("مواعيدي")],
           ["sheets", "document-text-outline", t("شيتاتي")],
           ["tasks", "checkmark-circle-outline", t("مهامي")],
@@ -1143,7 +1100,7 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
           </View>
           <View style={s.card}>
             <Label style={s.heading}>{t("التحليلات والملفات")}</Label>
-            <Label>{t("تحليلات Firebase اختيارية ومتوقفة حتى توافق عليها. لا نرسل أسماء المهمات أو بريدك كأحداث تحليلية. النغمة التي تختارها تظل على جهازك.")}</Label>
+            <Label>{t("تحليلات Firebase اختيارية ومتوقفة حتى توافق عليها. لا نرسل أسماء المهمات أو بريدك كأحداث تحليلية. نغمات المواعيد مدمجة داخل التطبيق.")}</Label>
           </View>
           <View style={s.card}>
             <Label style={s.heading}>{t("الاستخدام والحماية")}</Label>
@@ -1178,6 +1135,64 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
         </SafeAreaView>
       </Modal>
       {/* ── Editors ── */}
+      <Modal visible={historyTask !== null} animationType="slide" onRequestClose={() => setHistoryTask(null)}>
+        <SafeAreaView style={s.screen}>
+          <ScrollView contentContainerStyle={s.content}>
+            <View style={s.row}>
+              <Pressable accessibilityLabel={t("إغلاق")} style={s.iconAction} onPress={() => setHistoryTask(null)}>
+                <Ionicons name="close" size={22} color={C.text} />
+              </Pressable>
+              <View style={{ flex: 1 }}>
+                <Label style={s.heroTitle}>{t("سجل التاسك")}</Label>
+                <Label style={s.small}>{t("كل الأوقات المسجلة على التاسك")}</Label>
+              </View>
+            </View>
+            <LinearGradient colors={["#264936", "#182C29"]} style={s.historySummary}>
+              <View style={s.row}>
+                <View style={[s.taskIcon, { backgroundColor: `${historyTask?.color ?? C.mint}22` }]}>
+                  <Label style={{ fontSize: 27 }}>{historyTask?.emoji}</Label>
+                </View>
+                <View style={{ flex: 1, gap: 2 }}>
+                  <Label style={s.heading}>{historyTask?.name}</Label>
+                  <Label style={s.small}>{t("إجمالي وقت المهمة")}</Label>
+                </View>
+              </View>
+              <Label style={s.historyTotal}>{loggedDuration(historySeconds)}</Label>
+              <View style={s.historyCount}>
+                <Ionicons name="layers-outline" size={15} color={C.mint} />
+                <Label style={{ color: C.mint, fontSize: 13 }}>{historySessions.length} {t("تسجيل وقت")}</Label>
+              </View>
+            </LinearGradient>
+            {!historySessions.length
+              ? <View style={s.emptyHistory}>
+                  <Ionicons name="time-outline" size={34} color={C.muted} />
+                  <Label style={s.heading}>{t("لا توجد تسجيلات وقت لهذا التاسك.")}</Label>
+                  <Label style={s.small}>{t("ابدأ العداد أو أضف وقتًا يدويًا وسيظهر هنا.")}</Label>
+                </View>
+              : <View style={s.sessionList}>{historySessions.map((session, index) => (
+                  <View key={session.id} style={[s.sessionRow, index > 0 && s.sessionDivider]}>
+                    <View style={[s.sessionIcon, session.source === "manual" && { backgroundColor: "#302B46" }]}>
+                      <Ionicons name={session.source === "timer" ? "stopwatch-outline" : "create-outline"} size={20} color={session.source === "timer" ? C.mint : C.purple} />
+                    </View>
+                    <View style={{ flex: 1, gap: 2 }}>
+                      <Label style={{ fontWeight: "700" }}>{session.source === "timer" ? t("عداد") : t("تسجيل يدوي")}</Label>
+                      <Label style={s.small}>{new Date(`${session.date}T12:00:00`).toLocaleDateString(
+                        language === "ar" ? "ar-EG" : "en-US",
+                        { weekday: "short", day: "numeric", month: "short" },
+                      )} · {new Date(session.createdAt).toLocaleTimeString(
+                        language === "ar" ? "ar-EG" : "en-US",
+                        { hour: "numeric", minute: "2-digit" },
+                      )}</Label>
+                    </View>
+                    <Label style={s.sessionDuration}>{stopwatchLabel(session.seconds)}</Label>
+                    <Pressable accessibilityLabel={t("حذف")} disabled={busy} style={s.sessionDelete} onPress={() => removeWorkSession(session)}>
+                      <Ionicons name="trash-outline" size={19} color="#FF8091" />
+                    </Pressable>
+                  </View>
+                ))}</View>}
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
       <Modal visible={manualLogTask !== null} animationType="slide" onRequestClose={() => setManualLogTask(null)}>
         <SafeAreaView style={s.screen}>
           <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
@@ -1189,8 +1204,11 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
               <Label style={s.heading}>{manualLogTask?.emoji} {manualLogTask?.name}</Label>
               <Label>{t("التاريخ")}</Label>
               <Field value={manualDate} onChangeText={setManualDate} keyboardType="numbers-and-punctuation" placeholder="YYYY-MM-DD" />
-              <Label>{t("الدقائق التي عملتها")}</Label>
-              <Field value={manualMinutes} onChangeText={setManualMinutes} keyboardType="number-pad" maxLength={4} />
+              <Label>{t("الوقت الذي عملته")}</Label>
+              <View style={s.row}>
+                <View style={{ flex: 1 }}><Label>{t("الساعات")}</Label><Field value={manualHours} onChangeText={setManualHours} keyboardType="number-pad" maxLength={2} /></View>
+                <View style={{ flex: 1 }}><Label>{t("الدقائق")}</Label><Field value={manualMinutePart} onChangeText={setManualMinutePart} keyboardType="number-pad" maxLength={2} /></View>
+              </View>
               <Button disabled={busy} title={busy ? t("جاري الحفظ…") : t("حفظ الوقت")} onPress={saveManualLog} />
             </ScrollView>
           </KeyboardAvoidingView>
@@ -1223,8 +1241,7 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
                 maxLength={60}
                 placeholder={t("مثلًا: قراءة ١٠ صفحات")}
               />
-              <Label>{t("مدة المهمة بالدقائق")}</Label>
-              <Field value={gtMinutes} onChangeText={setGtMinutes} keyboardType="number-pad" maxLength={3} />
+              <Label style={s.small}>{t("مدة المهمة بتتحسب تلقائيًا من الوقت اللي بتسجله.")}</Label>
               {/* Type toggle */}
               <Label style={s.heading}>{t("اختار نوع المهمة")}</Label>
               <View style={s.wrap}>
@@ -1302,6 +1319,15 @@ function Home({ user }: { user: FirebaseAuthTypes.User }) {
                   </View>
                 </>
               )}
+              <Label style={s.heading}>{t("الشيتات")}</Label>
+              <Label style={s.small}>{t("اختار الشيت اللي هتتحسب عليه كل أوقات المهمة.")}</Label>
+              {!sheets.length && <Label style={s.small}>{t("مفيش شيتات لسه. تقدر تحفظ المهمة وتضيفها لشيت بعدين.")}</Label>}
+              {sheets.map(sheet => (
+                <Pressable key={sheet.id} style={[s.chip, gtSheetIds.includes(sheet.id) && { backgroundColor: C.mint }]}
+                  onPress={() => setGtSheetIds(ids => ids.includes(sheet.id) ? ids.filter(id => id !== sheet.id) : [...ids, sheet.id])}>
+                  <Label style={{ color: gtSheetIds.includes(sheet.id) ? C.bg : C.text }}>{gtSheetIds.includes(sheet.id) ? "✓ " : "○ "}{sheet.title}</Label>
+                </Pressable>
+              ))}
               <Label>{t("رمز المهمة")}</Label>
               <View style={s.wrap}>
                 {["✅", "⭐", "🎯", "💡", "🔑", "📌", "🚀", "🛡️"].map((e) => (
@@ -1438,6 +1464,181 @@ const createStyles = (rtl: boolean) =>
       borderWidth: 1,
       borderColor: C.line,
     },
+    taskCard: {
+      backgroundColor: C.card,
+      padding: 16,
+      borderRadius: 22,
+      gap: 14,
+      borderWidth: 1,
+      borderTopWidth: 3,
+      borderColor: C.line,
+    },
+    todayTaskCard: {
+      backgroundColor: C.card,
+      padding: 14,
+      borderRadius: 20,
+      gap: 12,
+      borderWidth: 1,
+      borderTopWidth: 3,
+      borderColor: C.line,
+    },
+    taskIcon: {
+      width: 52,
+      height: 52,
+      borderRadius: 17,
+      alignItems: "center",
+      justifyContent: "center",
+      borderWidth: 1,
+      borderColor: C.line,
+    },
+    taskBadgeRow: {
+      flexDirection: rtl ? "row-reverse" : "row",
+      alignItems: "center",
+      flexWrap: "wrap",
+      gap: 7,
+    },
+    statusBadge: {
+      backgroundColor: C.line,
+      borderRadius: 20,
+      paddingHorizontal: 9,
+      paddingVertical: 3,
+    },
+    badgeText: { color: C.muted, fontSize: 11, lineHeight: 17 },
+    taskCheck: {
+      width: 39,
+      height: 39,
+      borderRadius: 14,
+      borderWidth: 1,
+      borderColor: C.line,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: C.bg,
+    },
+    taskMetrics: {
+      flexDirection: rtl ? "row-reverse" : "row",
+      gap: 8,
+    },
+    taskMetric: {
+      flex: 1,
+      minWidth: 130,
+      backgroundColor: C.bg,
+      borderRadius: 14,
+      paddingVertical: 10,
+      paddingHorizontal: 12,
+      gap: 1,
+    },
+    metricValue: { color: C.text, fontSize: 15, fontWeight: "800", lineHeight: 22 },
+    sheetLine: {
+      flexDirection: rtl ? "row-reverse" : "row",
+      alignItems: "center",
+      gap: 7,
+      paddingHorizontal: 3,
+    },
+    taskActions: {
+      flexDirection: rtl ? "row-reverse" : "row",
+      alignItems: "center",
+      flexWrap: "wrap",
+      gap: 8,
+    },
+    actionButton: {
+      minHeight: 40,
+      flexDirection: rtl ? "row-reverse" : "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 7,
+      paddingVertical: 8,
+      paddingHorizontal: 13,
+      borderRadius: 13,
+      backgroundColor: "#243E32",
+    },
+    actionPrimary: { backgroundColor: C.mint },
+    actionPrimaryText: { color: C.bg, fontSize: 13, fontWeight: "800" },
+    iconAction: {
+      width: 40,
+      height: 40,
+      borderRadius: 13,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: C.line,
+    },
+    taskFooter: {
+      flexDirection: rtl ? "row-reverse" : "row",
+      alignItems: "center",
+      flexWrap: "wrap",
+      gap: 8,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: C.line,
+      paddingTop: 12,
+    },
+    footerAction: {
+      flexDirection: rtl ? "row-reverse" : "row",
+      alignItems: "center",
+      gap: 5,
+      paddingVertical: 5,
+      paddingHorizontal: 5,
+    },
+    historySummary: { padding: 18, borderRadius: 24, gap: 14 },
+    historyTotal: { color: C.mint, fontSize: 31, lineHeight: 42, fontWeight: "900" },
+    historyCount: {
+      alignSelf: rtl ? "flex-end" : "flex-start",
+      flexDirection: rtl ? "row-reverse" : "row",
+      alignItems: "center",
+      gap: 6,
+      backgroundColor: "#193626",
+      paddingVertical: 6,
+      paddingHorizontal: 10,
+      borderRadius: 20,
+    },
+    emptyHistory: {
+      minHeight: 180,
+      borderRadius: 22,
+      borderWidth: 1,
+      borderStyle: "dashed",
+      borderColor: C.line,
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 7,
+      padding: 24,
+    },
+    sessionList: {
+      backgroundColor: C.card,
+      borderRadius: 22,
+      borderWidth: 1,
+      borderColor: C.line,
+      overflow: "hidden",
+      paddingHorizontal: 14,
+    },
+    sessionRow: {
+      minHeight: 76,
+      flexDirection: rtl ? "row-reverse" : "row",
+      alignItems: "center",
+      gap: 11,
+      paddingVertical: 12,
+    },
+    sessionDivider: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.line },
+    sessionIcon: {
+      width: 40,
+      height: 40,
+      borderRadius: 13,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: "#203B30",
+    },
+    sessionDuration: {
+      color: C.text,
+      fontSize: 14,
+      lineHeight: 22,
+      fontWeight: "800",
+      fontVariant: ["tabular-nums"],
+    },
+    sessionDelete: {
+      width: 36,
+      height: 36,
+      borderRadius: 12,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: "#34232A",
+    },
     row: {
       flexDirection: rtl ? "row" : "row-reverse",
       alignItems: "center",
@@ -1490,13 +1691,6 @@ const createStyles = (rtl: boolean) =>
       fontSize: 16,
       marginVertical: 5,
     },
-    emoji: {
-      width: 54,
-      height: 54,
-      borderRadius: 18,
-      alignItems: "center",
-      justifyContent: "center",
-    },
     pill: {
       borderRadius: 12,
       paddingVertical: 8,
@@ -1522,13 +1716,6 @@ const createStyles = (rtl: boolean) =>
       overflow: "hidden",
     },
     bar: { width: "100%", borderRadius: 8 },
-    heatmap: {
-      flexDirection: rtl ? "row-reverse" : "row",
-      flexWrap: "wrap",
-      gap: 7,
-      marginVertical: 15,
-    },
-    cell: { width: 25, height: 25, borderRadius: 7 },
     nav: {
       flexDirection: rtl ? "row" : "row-reverse",
       borderTopWidth: 1,

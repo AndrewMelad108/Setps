@@ -35,12 +35,10 @@ export async function completeGlobalTask(
   uid: string,
   task: GlobalTask,
   date: string,
-  actualSeconds?: number,
 ) {
   const id = task.id + "_" + date;
   const entry: GlobalTaskEntry = {
-    id, globalTaskId: task.id, date, minutes: task.minutes ?? 20,
-    ...(actualSeconds && actualSeconds > 0 ? { actualSeconds: Math.round(actualSeconds) } : {}),
+    id, globalTaskId: task.id, date,
   };
   await setDoc(doc(db, "users", uid, "globalEntries", id), entry);
 }

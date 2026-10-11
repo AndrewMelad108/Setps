@@ -8,13 +8,12 @@ const h: Habit = {
   color: "#fff",
   createdDate: "2026-09-21",
   archivedDate: null,
-  schedules: [{ from: "2026-09-21", days: [1, 3, 5], minutes: 20 }],
+  schedules: [{ from: "2026-09-21", days: [1, 3, 5] }],
 };
 const entry = (date: string) => ({
   id: "read_" + date,
   habitId: "read",
   date,
-  minutes: 20,
 });
 test("scheduled days only, ignores dates before creation", () => {
   assert.equal(due(h, "2026-09-20"), false);
@@ -31,7 +30,7 @@ test("schedule revisions preserve historical denominator", () => {
     ...h,
     schedules: [
       ...h.schedules,
-      { from: "2026-09-28", days: [0, 1, 2, 3, 4, 5, 6], minutes: 30 },
+      { from: "2026-09-28", days: [0, 1, 2, 3, 4, 5, 6] },
     ],
   };
   assert.equal(metrics([revised], [], "2026-09-27", 7).expected, 3);
@@ -58,28 +57,6 @@ test("completion duplicates do not inflate rate", () =>
 test("month boundary and empty denominator", () => {
   assert.equal(shift("2026-10-01", -1), "2026-09-30");
   assert.equal(metrics([], [], "2026-09-21").rate, 0);
-});
-
-test("status distinguishes completion, a missed task, and a rest day", async () => {
-  const { taskStatus } = await import("../src/model");
-  const entries = [entry("2026-09-21")];
-  assert.equal(taskStatus(h, entries, "2026-09-21"), "done");
-  assert.equal(taskStatus(h, entries, "2026-09-23"), "pending");
-  assert.equal(taskStatus(h, entries, "2026-09-22"), "unscheduled");
-  assert.equal(taskStatus(h, [], "2026-09-20"), "unscheduled");
-  assert.equal(taskStatus({ ...h, archivedDate: "2026-09-23" }, entries, "2026-09-23"), "unscheduled");
-  assert.equal(taskStatus(h, [], "2026-09-21"), "pending");
-});
-
-test("daily filters combine status and search without counting unscheduled tasks", async () => {
-  const { filterTasks } = await import("../src/model");
-  const arabic = { ...h, id: "arabic", name: "قراءة يومية" };
-  const rest = { ...h, id: "rest", schedules: [{ from: h.createdDate, days: [2], minutes: 5 }] };
-  const habits = [h, arabic, rest], entries = [entry("2026-09-21")];
-  assert.deepEqual(filterTasks(habits, entries, "2026-09-21", "all").map(x => x.id), ["read", "arabic"]);
-  assert.deepEqual(filterTasks(habits, entries, "2026-09-21", "done", " READ ").map(x => x.id), ["read"]);
-  assert.deepEqual(filterTasks(habits, entries, "2026-09-21", "pending", "قراءة").map(x => x.id), ["arabic"]);
-  assert.equal(filterTasks(habits, entries, "2026-09-21", "pending", "read").length, 0);
 });
 
 test("task duration accepts English and Arabic keyboard digits", async () => {

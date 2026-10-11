@@ -45,7 +45,6 @@ export function syncTimerNotification(
   timer: { end: number | null; remaining: number } | null,
   name: string,
   language: Language,
-  finishSound: "success" | "bell" | "spark" | "silent" | "custom" = "success",
 ): Promise<void> {
   const update = async () => {
     const state = timerNotificationState(timer, Date.now());
@@ -65,7 +64,7 @@ export function syncTimerNotification(
       content: {
         title: name,
         body: state.running
-          ? `${translate(language, "الوقت المتبقي")} · ${state.label}`
+          ? `${translate(language, "الوقت المنقضي")} · ${state.label}`
           : `${translate(language, "المؤقّت متوقف مؤقتًا")} · ${state.label}`,
         sound: false,
         sticky: true,
@@ -74,32 +73,6 @@ export function syncTimerNotification(
       trigger: Platform.OS === "android" ? { channelId: statusChannel } : null,
     });
 
-    if (state.running && state.end) {
-      const bundledSound = finishSound === "silent" ? null
-        : finishSound === "custom" ? "default" : `${finishSound}.mp3`;
-      const finishChannel = `focus-finished-${finishSound}-v2`;
-      if (Platform.OS === "android") {
-        await Notifications.setNotificationChannelAsync(finishChannel, {
-          name: translate(language, "نغمة انتهاء المهمة"),
-          importance: Notifications.AndroidImportance.HIGH,
-          vibrationPattern: finishSound === "silent" ? null : [0, 250, 180, 250],
-          sound: bundledSound,
-        });
-      }
-      await Notifications.scheduleNotificationAsync({
-        identifier: completionId,
-        content: {
-          title: name,
-          body: translate(language, "الجلسة خلصت ✨ سجّل الإنجاز"),
-          sound: bundledSound ?? false,
-        },
-        trigger: {
-          type: Notifications.SchedulableTriggerInputTypes.DATE,
-          date: new Date(state.end),
-          ...(Platform.OS === "android" ? { channelId: finishChannel } : {}),
-        },
-      });
-    }
   };
   pending = pending.catch(() => {}).then(update);
   return pending;

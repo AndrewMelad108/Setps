@@ -27,7 +27,11 @@ module.exports = {
         foregroundImage: "./logo-saay.png",
         backgroundColor: "#0B1017",
       },
-      permissions: ["android.permission.POST_NOTIFICATIONS"],
+      permissions: [
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.SCHEDULE_EXACT_ALARM",
+        "android.permission.VIBRATE",
+      ],
       blockedPermissions: [
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE",
@@ -51,9 +55,9 @@ module.exports = {
       "./plugins/withTimerIcon",
       ["expo-notifications", {
         sounds: [
-          "./assets/sounds/success.mp3",
-          "./assets/sounds/bell.mp3",
-          "./assets/sounds/spark.mp3",
+          "./assets/sounds/alarm.wav",
+          "./assets/sounds/siren.wav",
+          "./assets/sounds/urgent.wav",
         ],
         defaultChannel: "focus-timer-v2",
       }],

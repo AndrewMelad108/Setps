@@ -1,17 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { WorkSession, WorkSheet, isDateKey, sessionsForSheet, sheetEntries, sheetSummary, workSheetSummary } from "../src/model";
+import { Appointment, WorkSession, WorkSheet, appointmentOccursOn, appointmentTimeTo12, appointmentTimeTo24, durationMinutes, isDateKey, sessionsForSheet, workByTaskForSheet, workSheetSummary } from "../src/model";
 
 const sheet: WorkSheet = {
   id: "oct", title: "October", from: "2026-10-01", to: "2026-10-31",
   hourlyRate: 100, currency: "EGP", taskIds: ["design", "code"], createdAt: 1,
 };
-const entries = [
-  { id: "1", globalTaskId: "design", date: "2026-10-01", minutes: 60, actualSeconds: 1800 },
-  { id: "2", globalTaskId: "code", date: "2026-10-31", minutes: 60 },
-  { id: "3", globalTaskId: "code", date: "2026-11-01", minutes: 60 },
-  { id: "4", globalTaskId: "other", date: "2026-10-10", minutes: 60 },
-];
 const sessions: WorkSession[] = [
   { id: "s1", taskId: "design", date: "2026-10-01", seconds: 3600, source: "timer", createdAt: 1 },
   { id: "s2", taskId: "design", date: "2026-10-01", seconds: 1800, source: "manual", createdAt: 2 },
@@ -20,19 +14,33 @@ const sessions: WorkSession[] = [
   { id: "s5", taskId: "other", date: "2026-10-02", seconds: 3600, source: "timer", createdAt: 5 },
 ];
 
-test("sheet includes selected tasks within an inclusive date range", () => {
-  assert.deepEqual(sheetEntries(sheet, entries).map(entry => entry.id), ["1", "2"]);
-});
-
-test("sheet prefers measured time and falls back to legacy planned minutes", () => {
-  assert.deepEqual(sheetSummary(sheet, entries), { count: 2, seconds: 5400, hours: 1.5, total: 150 });
-});
-
-test("sheet totals multiple timer and manual sessions across work days", () => {
-  assert.deepEqual(sessionsForSheet(sheet, sessions).map(session => session.id), ["s1", "s2", "s3"]);
+test("sheet totals every timer and manual session for its assigned tasks", () => {
+  assert.deepEqual(sessionsForSheet(sheet, sessions).map(session => session.id), ["s1", "s2", "s3", "s4"]);
   assert.deepEqual(workSheetSummary(sheet, sessions), {
-    taskCount: 2, sessionCount: 3, seconds: 6300, hours: 1.75, total: 175,
+    taskCount: 2, sessionCount: 4, seconds: 9900, hours: 2.75, total: 275,
   });
+  assert.deepEqual(workByTaskForSheet(sheet, sessions), [
+    { taskId: "design", seconds: 5400 }, { taskId: "code", seconds: 4500 },
+  ]);
+});
+
+test("empty sheets are valid summaries and duration accepts hours plus minutes", () => {
+  assert.deepEqual(workSheetSummary({ ...sheet, taskIds: [] }, sessions), {
+    taskCount: 0, sessionCount: 0, seconds: 0, hours: 0, total: 0,
+  });
+  assert.equal(durationMinutes("٢", "٣٠"), 150);
+  assert.equal(Number.isNaN(durationMinutes("1", "60")), true);
+});
+
+test("appointments support one-time, daily and yearly recurrence", () => {
+  const base: Appointment = { id: "a", title: "A", date: "2026-10-10", time: "09:00", notes: "", createdAt: 1 };
+  assert.equal(appointmentOccursOn(base, "2026-10-11"), false);
+  assert.equal(appointmentOccursOn({ ...base, recurrence: "daily" }, "2026-10-11"), true);
+  assert.equal(appointmentOccursOn({ ...base, recurrence: "yearly" }, "2027-10-10"), true);
+  assert.equal(appointmentOccursOn({ ...base, recurrence: "yearly" }, "2027-10-11"), false);
+  assert.equal(appointmentTimeTo24("12:30", "AM"), "00:30");
+  assert.equal(appointmentTimeTo24("1:05", "PM"), "13:05");
+  assert.deepEqual(appointmentTimeTo12("23:15"), { time: "11:15", period: "PM" });
 });
 
 test("date keys reject impossible calendar dates", () => {

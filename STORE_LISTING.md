@@ -26,7 +26,7 @@ SYNQ تطبيق إنتاجية يساعدك على تنظيم المهام وا�
 - أنشئ شيتات لفترات زمنية محددة واعرض إجمالي الوقت والأرباح.
 - صدّر الشيت PDF أو ملف Excel متوافقًا مع التطبيقات المكتبية وشاركه عبر تطبيقات الهاتف.
 - تابع المواعيد السنوية ومواعيد اليوم أو أي يوم تختاره.
-- اختر نغمة انتهاء أو أضف نغمة من جهازك.
+- اختر نغمة قوية لتنبيه الموعد وعاينها قبل الحفظ.
 - استخدم الواجهة بالعربية أو الإنجليزية.
 
 بيانات حسابك محمية، ويمكنك حذف الحساب والبيانات نهائيًا من داخل الإعدادات.
@@ -41,7 +41,7 @@ SYNQ is a productivity app for organizing tasks and appointments while keeping a
 - Create dated work sheets with total time and earnings.
 - Export sheets as PDF or an Excel-compatible file and share them through apps on your phone.
 - See annual appointments, today's schedule, or any selected date.
-- Choose a finish sound or import one from your device.
+- Choose and preview a loud appointment alert sound.
 - Use the app in Arabic or English.
 
 Your account data is protected, and you can permanently delete your account and data from Settings.

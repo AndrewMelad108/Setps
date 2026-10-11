@@ -5,7 +5,6 @@ export type TaskItem = {
   name: string;
   emoji: string;
   color: string;
-  minutes: number;
   isEssential: boolean;
   scheduled: boolean;
   done: boolean;
@@ -19,7 +18,7 @@ export function taskList(
   return [
     ...tasks.filter(t => !t.archivedDate || t.archivedDate > date).map(t => ({
       id: `global:${t.id}`, name: t.name, emoji: t.emoji, color: t.color,
-      minutes: t.minutes ?? 20, isEssential: t.isEssential,
+      isEssential: t.isEssential,
       scheduled: date >= t.createdDate && globalTaskDue(t, date),
       done: taskEntries.some(e => e.globalTaskId === t.id && e.date === date),
       source: t,
@@ -42,12 +41,10 @@ export function taskStatisticsData(
     tasks: [...tasks.map(task => ({
       id: `global:${task.id}`, name: task.name, emoji: task.emoji, color: task.color,
       createdDate: task.createdDate, archivedDate: task.archivedDate,
-      schedules: [{ from: task.createdDate, days: task.isEssential ? [0, 1, 2, 3, 4, 5, 6] : task.days, minutes: task.minutes ?? 20 }],
+      schedules: [{ from: task.createdDate, days: task.isEssential ? [0, 1, 2, 3, 4, 5, 6] : task.days }],
     }))],
     entries: [...taskEntries.filter(entry => taskIds.has(entry.globalTaskId)).map(entry => ({
       id: `global:${entry.id}`, habitId: `global:${entry.globalTaskId}`, date: entry.date,
-      // Older completion records did not store a duration; do not invent elapsed minutes.
-      minutes: entry.minutes ?? 0,
     }))],
   };
 }

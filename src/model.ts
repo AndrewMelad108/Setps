@@ -1,4 +1,4 @@
-export type Schedule = { from: string; days: number[]; minutes: number };
+export type Schedule = { from: string; days: number[] };
 export type Habit = {
   id: string;
   name: string;
@@ -12,7 +12,6 @@ export type Entry = {
   id: string;
   habitId: string;
   date: string;
-  minutes: number;
 };
 export const dateKey = (d = new Date()) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -70,23 +69,6 @@ export function streak(h: Habit, entries: Entry[], today: string) {
   return total;
 }
 
-export type TaskStatus = "done" | "pending" | "unscheduled";
-export function taskStatus(h: Habit, entries: Entry[], date: string): TaskStatus {
-  if (!due(h, date)) return "unscheduled";
-  return entries.some(e => e.habitId === h.id && e.date === date) ? "done" : "pending";
-}
-export function filterTasks(
-  habits: Habit[], entries: Entry[], date: string,
-  status: "all" | "done" | "pending", query = "",
-) {
-  const search = query.trim().toLocaleLowerCase();
-  return habits.filter(h => {
-    const state = taskStatus(h, entries, date);
-    return state !== "unscheduled" && (status === "all" || state === status)
-      && h.name.toLocaleLowerCase().includes(search);
-  });
-}
-
 /** Accept digits produced by Arabic and Persian keyboards as well as Latin digits. */
 export function parseMinutes(value: string) {
   return Number(value.replace(/[٠-٩]/g, digit => String(digit.charCodeAt(0) - 0x0660))
@@ -106,9 +88,6 @@ export type GlobalTask = {
 };
 
 export type GlobalTaskEntry = {
-  minutes?: number;
-  /** Measured focus time. Older records only contain planned minutes. */
-  actualSeconds?: number;
   id: string;           // globalTaskId + '_' + date
   globalTaskId: string;
   date: string;
@@ -131,6 +110,10 @@ export type Appointment = {
   title: string;
   date: string;
   time: string;
+  /** Missing on older records and therefore treated as a one-time appointment. */
+  recurrence?: "once" | "daily" | "yearly";
+  /** Loud bundled notification sound; older records use alarm. */
+  sound?: "alarm" | "siren" | "urgent";
   notes: string;
   createdAt: number;
 };
@@ -150,38 +133,62 @@ export function isDateKey(value: string) {
   return !Number.isNaN(date.valueOf()) && dateKey(date) === value;
 }
 
-export function sheetEntries(sheet: WorkSheet, entries: GlobalTaskEntry[]) {
+export function sessionsForSheet(sheet: WorkSheet, sessions: WorkSession[]) {
   const ids = new Set(sheet.taskIds);
-  return entries.filter(entry => ids.has(entry.globalTaskId)
-    && entry.date >= sheet.from && entry.date <= sheet.to);
+  // A sheet is the billing home for its tasks. Once a task is assigned, every
+  // recorded session must be visible in that sheet, regardless of when it was
+  // logged. The date range remains useful as sheet metadata/export context.
+  return sessions.filter(session => ids.has(session.taskId));
 }
 
-export function entrySeconds(entry: GlobalTaskEntry) {
-  return Math.max(0, entry.actualSeconds ?? (entry.minutes ?? 0) * 60);
+export function durationMinutes(hoursValue: string, minutesValue: string) {
+  const hours = parseMinutes(hoursValue || "0");
+  const minutes = parseMinutes(minutesValue || "0");
+  if (!Number.isInteger(hours) || !Number.isInteger(minutes)
+    || hours < 0 || minutes < 0 || minutes > 59) return Number.NaN;
+  return hours * 60 + minutes;
 }
 
-export function sheetSummary(sheet: WorkSheet, entries: GlobalTaskEntry[]) {
-  const selected = sheetEntries(sheet, entries);
-  const seconds = selected.reduce((total, entry) => total + entrySeconds(entry), 0);
+export function appointmentOccursOn(appointment: Appointment, date: string) {
+  if (!isDateKey(date)) return false;
+  const recurrence = appointment.recurrence ?? "once";
+  if (date < appointment.date) return false;
+  if (recurrence === "daily") return true;
+  if (recurrence === "yearly") return date.slice(5) === appointment.date.slice(5);
+  return date === appointment.date;
+}
+
+export function appointmentTimeTo24(time: string, period: "AM" | "PM") {
+  const match = /^(0?[1-9]|1[0-2]):([0-5]\d)$/.exec(time);
+  if (!match) return null;
+  let hour = Number(match[1]) % 12;
+  if (period === "PM") hour += 12;
+  return `${String(hour).padStart(2, "0")}:${match[2]}`;
+}
+
+export function appointmentTimeTo12(time: string) {
+  const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(time);
+  if (!match) return { time: "09:00", period: "AM" as const };
+  const hour = Number(match[1]);
   return {
-    count: selected.length,
-    seconds,
-    hours: seconds / 3600,
-    total: (seconds / 3600) * sheet.hourlyRate,
+    time: `${String(hour % 12 || 12).padStart(2, "0")}:${match[2]}`,
+    period: (hour >= 12 ? "PM" : "AM") as "AM" | "PM",
   };
 }
 
-export function sessionsForSheet(sheet: WorkSheet, sessions: WorkSession[]) {
-  const ids = new Set(sheet.taskIds);
-  return sessions.filter(session => ids.has(session.taskId)
-    && session.date >= sheet.from && session.date <= sheet.to);
+export function workByTaskForSheet(sheet: WorkSheet, sessions: WorkSession[]) {
+  const totals = new Map<string, number>();
+  for (const session of sessionsForSheet(sheet, sessions))
+    totals.set(session.taskId, (totals.get(session.taskId) ?? 0) + session.seconds);
+  return sheet.taskIds.map(taskId => ({ taskId, seconds: totals.get(taskId) ?? 0 }));
 }
 
 export function workSheetSummary(sheet: WorkSheet, sessions: WorkSession[]) {
   const selected = sessionsForSheet(sheet, sessions);
   const seconds = selected.reduce((total, session) => total + session.seconds, 0);
   return {
-    taskCount: new Set(selected.map(session => session.taskId)).size,
+    // Assigned tasks must show up before their first work session too.
+    taskCount: new Set(sheet.taskIds).size,
     sessionCount: selected.length,
     seconds,
     hours: seconds / 3600,
